@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Shield, User, Users, Trophy, Camera, Check, X, Plus, ChevronLeft, Newspaper,
-  LogOut, Loader2, ImagePlus, Search, MessageCircle, Radio, Briefcase,
+  LogOut, Loader2, ImagePlus, Search, MessageCircle, Radio, Briefcase, ClipboardList,
+  LayoutDashboard,
 } from "lucide-react";
 import {
   api, genToken, getMyProfiles, addMyProfile, getOwnerToken,
@@ -37,10 +38,28 @@ async function resizeImage(file, maxW = 640, quality = 0.7) {
 
 const TYPE_META = {
   player: { label: "Player", icon: User, color: "var(--floodlight)" },
-  club: { label: "Club / School", icon: Shield, color: "var(--score)" },
+  club: { label: "Team", icon: Shield, color: "var(--score)" },
   supporter: { label: "Supporter", icon: Users, color: "var(--chalk)" },
   scout: { label: "Scout / Agent", icon: Briefcase, color: "#7FB8E0" },
+  coach: { label: "Coach", icon: ClipboardList, color: "#6FBFAE" },
+  admin: { label: "Admin", icon: LayoutDashboard, color: "#CFCFCF" },
 };
+
+// Pitchside supports multiple sports. Player stats are stored under fixed
+// keys (gamesPlayed/tries/conversions/playerOfMatch) to avoid a data
+// migration on profiles that already exist, but the LABELS shown for those
+// keys change based on the player's chosen sport. "Other" is the fallback
+// for anyone who hasn't set a sport yet, or plays something not listed.
+const SPORTS = ["Rugby", "Football", "Cricket", "Netball", "Hockey"];
+const SPORT_STATS = {
+  Rugby: [["gamesPlayed", "Games"], ["tries", "Tries"], ["conversions", "Conversions"], ["playerOfMatch", "POTM"]],
+  Football: [["gamesPlayed", "Games"], ["tries", "Goals"], ["conversions", "Assists"], ["playerOfMatch", "POTM"]],
+  Cricket: [["gamesPlayed", "Matches"], ["tries", "Runs"], ["conversions", "Wickets"], ["playerOfMatch", "POTM"]],
+  Netball: [["gamesPlayed", "Games"], ["tries", "Goals"], ["conversions", "Intercepts"], ["playerOfMatch", "POTM"]],
+  Hockey: [["gamesPlayed", "Games"], ["tries", "Goals"], ["conversions", "Assists"], ["playerOfMatch", "POTM"]],
+  Other: [["gamesPlayed", "Games"], ["tries", "Score A"], ["conversions", "Score B"], ["playerOfMatch", "POTM"]],
+};
+const statLabelsFor = (sport) => SPORT_STATS[sport] || SPORT_STATS.Other;
 
 // ---------- shared UI atoms ----------
 function TeamSheetCard({ children, style }) {
@@ -92,7 +111,7 @@ function Field({ label, children }) {
 const inputStyle = { width: "100%", background: "var(--turf-900)", border: "1px solid var(--turf-500)", borderRadius: 6, color: "var(--chalk)", padding: "9px 11px", fontSize: 14, fontFamily: "var(--font-body)", outline: "none", boxSizing: "border-box" };
 
 function TrialBanner({ profile, onUpgrade, busy }) {
-  if (profile.plan === "paid") return null;
+  if (profile.plan === "paid" || profile.isAdmin) return null;
   const expired = profile.trialDaysLeft <= 0;
   return (
     <div style={{ background: expired ? "rgba(225,72,63,0.15)" : "rgba(255,201,77,0.12)", border: `1px solid ${expired ? "var(--score)" : "var(--floodlight)"}`, borderRadius: 8, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -112,10 +131,10 @@ function TrialBanner({ profile, onUpgrade, busy }) {
 function Onboarding({ onCreated, errorBanner }) {
   const [step, setStep] = useState(0);
   const [type, setType] = useState(null);
-  const [form, setForm] = useState({ name: "", position: "", jerseyNumber: "", location: "", level: "club" });
+  const [form, setForm] = useState({ name: "", position: "", jerseyNumber: "", location: "", level: "club", sport: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const priceFor = { player: 50, club: 250, supporter: 25, scout: 500 };
+  const priceFor = { player: 50, club: 250, supporter: 25, scout: 500, coach: 50 };
 
   const create = async () => {
     if (!form.name.trim()) return;
@@ -125,13 +144,18 @@ function Onboarding({ onCreated, errorBanner }) {
       id: uid(), type, name: form.name.trim(), createdAt: now(),
       ...(type === "player" ? {
         position: form.position, jerseyNumber: form.jerseyNumber, bio: "", weight: "", height: "", age: "", hobbies: "",
-        positions: form.position, career: [], stats: { gamesPlayed: 0, tries: 0, conversions: 0, playerOfMatch: 0 },
+        positions: form.position, career: [], sport: form.sport || "", stats: { gamesPlayed: 0, tries: 0, conversions: 0, playerOfMatch: 0 },
         achievements: [], clubId: null, pendingClubId: null, openToOffers: false, currentContract: "", askingSalary: "",
+        region: "", attributes: [],
         contactInfo: "", linkedAgents: [],
       } : {}),
-      ...(type === "club" ? { location: form.location, level: form.level, roster: [], pending: [], founded: "", trophies: [], currentLog: "" } : {}),
+      ...(type === "club" ? { location: form.location, level: form.level, sport: form.sport || "", roster: [], pending: [], founded: "", trophies: [], currentLog: "", coachRoster: [], coachPending: [] } : {}),
       ...(type === "supporter" ? { bio: "", career: "", supportedClubIds: [] } : {}),
       ...(type === "scout" ? { bio: "", achievements: "" } : {}),
+      ...(type === "coach" ? {
+        bio: "", qualifications: "", yearsExperience: "", specialization: "",
+        achievements: [], teamId: null, pendingTeamId: null,
+      } : {}),
     };
     const ownerToken = genToken();
     try {
@@ -147,7 +171,7 @@ function Onboarding({ onCreated, errorBanner }) {
     <div style={{ maxWidth: 440, margin: "40px auto", padding: "0 16px" }}>
       <div style={{ textAlign: "center", marginBottom: 28 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, letterSpacing: 1, color: "var(--floodlight)" }}>PITCHSIDE</div>
-        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>Every player, club, supporter and scout on one team sheet.</div>
+        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>Every player, team, supporter, coach and scout on one team sheet.</div>
       </div>
 
       {errorBanner && <div style={{ background: "rgba(225,72,63,0.15)", color: "var(--score)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>{errorBanner}</div>}
@@ -155,7 +179,7 @@ function Onboarding({ onCreated, errorBanner }) {
       {step === 0 && (
         <TeamSheetCard>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>Choose your profile type</div>
-          {Object.entries(TYPE_META).map(([key, meta]) => {
+          {Object.entries(TYPE_META).filter(([key]) => key !== "admin").map(([key, meta]) => {
             const Icon = meta.icon;
             return (
               <button key={key} onClick={() => { setType(key); setStep(1); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, background: "var(--turf-900)", border: "1px solid var(--turf-500)", borderRadius: 8, padding: "13px 14px", marginBottom: 10, cursor: "pointer", color: "var(--chalk)", textAlign: "left" }}>
@@ -167,6 +191,7 @@ function Onboarding({ onCreated, errorBanner }) {
                     {key === "club" && "Roster, lineups, live match scoring"}
                     {key === "supporter" && "Follow, share matchday moments"}
                     {key === "scout" && "Track players, chat, see contract status"}
+                    {key === "coach" && "Manage tactics, join a team's staff"}
                   </div>
                 </div>
               </button>
@@ -182,30 +207,47 @@ function Onboarding({ onCreated, errorBanner }) {
           </button>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>
             {type === "player" && "Set up your player profile"}
-            {type === "club" && "Set up your club or school"}
+            {type === "club" && "Set up your team"}
             {type === "supporter" && "Set up your supporter profile"}
             {type === "scout" && "Set up your scout / agent profile"}
+            {type === "coach" && "Set up your coach profile"}
           </div>
-          <Field label={type === "club" ? "Club / school name" : "Full name"}>
+          <Field label={type === "club" ? "Team name" : "Full name"}>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={type === "club" ? "Riverside FC" : "Alex Morgan"} />
           </Field>
           {type === "player" && (
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 2 }}><Field label="Position(s)"><input style={inputStyle} value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} placeholder="Fly-half, Centre" /></Field></div>
-              <div style={{ flex: 1 }}><Field label="Squad no."><input style={inputStyle} type="number" value={form.jerseyNumber} onChange={(e) => setForm({ ...form, jerseyNumber: e.target.value })} placeholder="8" /></Field></div>
-            </div>
+            <>
+              <Field label="Sport">
+                <select style={inputStyle} value={form.sport} onChange={(e) => setForm({ ...form, sport: e.target.value })}>
+                  <option value="">Select a sport</option>
+                  {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+              <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 2 }}><Field label="Position(s)"><input style={inputStyle} value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} placeholder="e.g. Midfielder, Wing Attack" /></Field></div>
+                <div style={{ flex: 1 }}><Field label="Squad no."><input style={inputStyle} type="number" value={form.jerseyNumber} onChange={(e) => setForm({ ...form, jerseyNumber: e.target.value })} placeholder="8" /></Field></div>
+              </div>
+            </>
           )}
           {type === "club" && (
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 1 }}><Field label="Location"><input style={inputStyle} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Johannesburg" /></Field></div>
-              <div style={{ flex: 1 }}>
-                <Field label="Level">
-                  <select style={inputStyle} value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })}>
-                    <option value="school">School</option><option value="club">Club</option><option value="pro">Professional</option>
-                  </select>
-                </Field>
+            <>
+              <Field label="Sport">
+                <select style={inputStyle} value={form.sport} onChange={(e) => setForm({ ...form, sport: e.target.value })}>
+                  <option value="">Select a sport</option>
+                  {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </Field>
+              <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 1 }}><Field label="Location"><input style={inputStyle} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Johannesburg" /></Field></div>
+                <div style={{ flex: 1 }}>
+                  <Field label="Level">
+                    <select style={inputStyle} value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })}>
+                      <option value="school">School</option><option value="club">Club</option><option value="pro">Professional</option>
+                    </select>
+                  </Field>
+                </div>
               </div>
-            </div>
+            </>
           )}
           {error && <div style={{ color: "var(--score)", fontSize: 13, marginBottom: 10 }}>{error}</div>}
           <Btn onClick={create} disabled={!form.name.trim() || busy} style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>
@@ -302,7 +344,9 @@ function PlayerView({ profile, refresh, clubs }) {
   const [grants, setGrants] = useState([]);
   const [chatWith, setChatWith] = useState(null);
 
-  useEffect(() => setDraft(profile), [profile.id]);
+  const [attrInput, setAttrInput] = useState("");
+
+  useEffect(() => setDraft({ region: "", attributes: [], sport: "", ...profile }), [profile.id]);
   const loadGrants = useCallback(async () => { try { setGrants(await api.listAccessRequestsFor(profile.id)); } catch {} }, [profile.id]);
   useEffect(() => { loadGrants(); }, [loadGrants]);
 
@@ -350,6 +394,7 @@ function PlayerView({ profile, refresh, clubs }) {
             <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.positions || profile.position || "Position not set"}</div>
             <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {myClub ? <Pill tone="amber">{myClub.name}</Pill> : pendingClub ? <Pill>Request sent \u00b7 {pendingClub.name}</Pill> : <Pill>Unattached</Pill>}
+              {profile.sport && <Pill>{profile.sport}</Pill>}
               {profile.openToOffers && <Pill tone="blue">Open to offers</Pill>}
             </div>
           </div>
@@ -366,6 +411,21 @@ function PlayerView({ profile, refresh, clubs }) {
             </div>
             <Field label="Position(s)"><input style={inputStyle} value={draft.positions} onChange={(e) => setDraft({ ...draft, positions: e.target.value })} placeholder="Fly-half, Centre" /></Field>
             <Field label="Hobbies"><input style={inputStyle} value={draft.hobbies} onChange={(e) => setDraft({ ...draft, hobbies: e.target.value })} placeholder="Fishing, gym" /></Field>
+            <Field label="Region"><input style={inputStyle} value={draft.region} onChange={(e) => setDraft({ ...draft, region: e.target.value })} placeholder="Gauteng, South Africa" /></Field>
+
+            <Field label="Attributes (things scouts might search for)">
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={inputStyle} value={attrInput} onChange={(e) => setAttrInput(e.target.value)} placeholder="Two-footed, aerial ability, pace..." onKeyDown={(e) => { if (e.key === "Enter" && attrInput.trim()) { e.preventDefault(); setDraft({ ...draft, attributes: [...draft.attributes, attrInput.trim()] }); setAttrInput(""); } }} />
+                <Btn onClick={() => { if (attrInput.trim()) { setDraft({ ...draft, attributes: [...draft.attributes, attrInput.trim()] }); setAttrInput(""); } }}><Plus size={14} /></Btn>
+              </div>
+              {draft.attributes.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                  {draft.attributes.map((a, i) => (
+                    <Pill key={i} tone="blue">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, attributes: draft.attributes.filter((_, idx) => idx !== i) })} /></Pill>
+                  ))}
+                </div>
+              )}
+            </Field>
 
             <Field label="Career - teams played for">
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
@@ -384,11 +444,17 @@ function PlayerView({ profile, refresh, clubs }) {
               </div>
             </Field>
 
+            <Field label="Sport">
+              <select style={inputStyle} value={draft.sport || ""} onChange={(e) => setDraft({ ...draft, sport: e.target.value })}>
+                <option value="">Select a sport</option>
+                {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
             <div style={{ display: "flex", gap: 10 }}>
-              <Field label="Games played"><input type="number" style={inputStyle} value={draft.stats.gamesPlayed} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, gamesPlayed: +e.target.value } })} /></Field>
-              <Field label="Tries"><input type="number" style={inputStyle} value={draft.stats.tries} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, tries: +e.target.value } })} /></Field>
-              <Field label="Conversions"><input type="number" style={inputStyle} value={draft.stats.conversions} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, conversions: +e.target.value } })} /></Field>
-              <Field label="POTM"><input type="number" style={inputStyle} value={draft.stats.playerOfMatch} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, playerOfMatch: +e.target.value } })} /></Field>
+              <Field label={statLabelsFor(draft.sport)[0][1]}><input type="number" style={inputStyle} value={draft.stats.gamesPlayed} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, gamesPlayed: +e.target.value } })} /></Field>
+              <Field label={statLabelsFor(draft.sport)[1][1]}><input type="number" style={inputStyle} value={draft.stats.tries} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, tries: +e.target.value } })} /></Field>
+              <Field label={statLabelsFor(draft.sport)[2][1]}><input type="number" style={inputStyle} value={draft.stats.conversions} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, conversions: +e.target.value } })} /></Field>
+              <Field label={statLabelsFor(draft.sport)[3][1]}><input type="number" style={inputStyle} value={draft.stats.playerOfMatch} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, playerOfMatch: +e.target.value } })} /></Field>
             </div>
             <div style={{ fontSize: 11, color: "var(--line-grey)", marginTop: -8, marginBottom: 14 }}>Stats show as club-approved once your club confirms them for the season.</div>
 
@@ -426,10 +492,11 @@ function PlayerView({ profile, refresh, clubs }) {
               {profile.height && <span>{profile.height}</span>}
               {profile.age && <span>{profile.age} yrs</span>}
               {profile.hobbies && <span>Hobbies: {profile.hobbies}</span>}
+              {profile.region && <span>Based in {profile.region}</span>}
             </div>
             <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14, flexWrap: "wrap" }}>
-              {[["Games", profile.stats.gamesPlayed], ["Tries", profile.stats.tries], ["Conv.", profile.stats.conversions], ["POTM", profile.stats.playerOfMatch]].map(([label, val]) => (
-                <div key={label}><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{val}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>{label}</div></div>
+              {statLabelsFor(profile.sport).map(([key, label]) => (
+                <div key={key}><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{profile.stats[key]}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>{label}</div></div>
               ))}
             </div>
             {profile.career?.length > 0 && (
@@ -443,6 +510,11 @@ function PlayerView({ profile, refresh, clubs }) {
                 {profile.achievements.map((a, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{a}</Pill>)}
               </div>
             )}
+            {profile.attributes?.length > 0 && (
+              <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {profile.attributes.map((a, i) => <Pill key={i} tone="blue">{a}</Pill>)}
+              </div>
+            )}
           </>
         )}
       </TeamSheetCard>
@@ -450,12 +522,12 @@ function PlayerView({ profile, refresh, clubs }) {
       {!myClub && !pendingClub && (
         <TeamSheetCard style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Join a club</div>
-            <Btn variant="ghost" onClick={() => setShowJoin((v) => !v)}>{showJoin ? "Close" : "Browse clubs"}</Btn>
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Join a team</div>
+            <Btn variant="ghost" onClick={() => setShowJoin((v) => !v)}>{showJoin ? "Close" : "Browse teams"}</Btn>
           </div>
           {showJoin && (
             <div style={{ marginTop: 12 }}>
-              {clubs.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13 }}>No clubs on Pitchside yet.</div>}
+              {clubs.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13 }}>No teams on Pitchside yet.</div>}
               {clubs.map((c) => (
                 <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderTop: "1px solid var(--turf-500)" }}>
                   <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.location} \u00b7 {c.level}</div></div>
@@ -512,7 +584,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
   const [newsText, setNewsText] = useState("");
   const [posting, setPosting] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [bioDraft, setBioDraft] = useState({ founded: profile.founded || "", currentLog: profile.currentLog || "" });
+  const [bioDraft, setBioDraft] = useState({ founded: profile.founded || "", currentLog: profile.currentLog || "", sport: profile.sport || "" });
   const [trophyInput, setTrophyInput] = useState("");
   const [trophies, setTrophies] = useState(profile.trophies || []);
   const [savingBio, setSavingBio] = useState(false);
@@ -521,6 +593,8 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 
   const rosterPlayers = profile.roster.map((id) => allProfiles.find((p) => p.id === id)).filter(Boolean);
   const pendingPlayers = profile.pending.map((id) => allProfiles.find((p) => p.id === id)).filter(Boolean);
+  const coachRoster = (profile.coachRoster || []).map((id) => allProfiles.find((p) => p.id === id)).filter(Boolean);
+  const pendingCoaches = (profile.coachPending || []).map((id) => allProfiles.find((p) => p.id === id)).filter(Boolean);
 
   const loadLive = useCallback(async () => {
     try { const all = await api.listLiveMatches("live"); setLiveMatch(all.find((m) => m.clubId === profile.id) || null); } catch {}
@@ -530,6 +604,13 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
   const respond = async (playerId, accept) => {
     setBusy(true);
     try { await api.respondToJoinRequest(profile.id, getOwnerToken(profile.id), playerId, accept); await refresh(); }
+    catch (e) { alert(e.message); }
+    setBusy(false);
+  };
+
+  const respondCoach = async (coachId, accept) => {
+    setBusy(true);
+    try { await api.respondToCoachJoinRequest(profile.id, getOwnerToken(profile.id), coachId, accept); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
@@ -582,7 +663,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
           <div style={{ width: 52, height: 52, borderRadius: 8, background: "var(--turf-900)", border: "1px solid var(--score)", display: "flex", alignItems: "center", justifyContent: "center" }}><Shield size={26} color="var(--score)" /></div>
-          <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><div style={{ color: "var(--line-grey)", fontSize: 13 }}>{profile.location} \u00b7 {profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</div></div>
+          <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><div style={{ color: "var(--line-grey)", fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span>{profile.location} \u00b7 {profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>{profile.sport && <Pill>{profile.sport}</Pill>}</div></div>
         </div>
         {profile.trophies?.length > 0 && <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>{profile.trophies.map((t, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{t}</Pill>)}</div>}
         {profile.currentLog && <div style={{ marginTop: 10, fontSize: 13, color: "var(--chalk)", whiteSpace: "pre-wrap" }}>{profile.currentLog}</div>}
@@ -595,7 +676,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
       {liveMatch && <LiveMatchCard match={liveMatch} viewerType="club-owner" onEnd={endLiveMatch} busy={busy} />}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        {["roster", "lineup", "news", "live match", "club info"].map((t) => (
+        {["roster", "lineup", "news", "live match", "team info"].map((t) => (
           <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "var(--floodlight)" : "transparent", color: tab === t ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>
             {t}{t === "roster" && profile.pending.length > 0 ? ` (${profile.pending.length})` : ""}
           </button>
@@ -620,9 +701,31 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
           {rosterPlayers.map((p) => (
             <div key={p.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
               <JerseyBadge number={p.jerseyNumber} size={32} />
-              <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position} \u00b7 {p.stats.tries}T {p.stats.conversions}C</div></div>
+              <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position} \u00b7 {p.stats.tries} {statLabelsFor(p.sport)[1][1].toLowerCase()}, {p.stats.conversions} {statLabelsFor(p.sport)[2][1].toLowerCase()}</div></div>
             </div>
           ))}
+
+          {pendingCoaches.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Coaching staff requests</div>
+              {pendingCoaches.map((c) => (
+                <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
+                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.specialization || "Coach"}</div></div>
+                  <div style={{ display: "flex", gap: 6 }}><Btn onClick={() => respondCoach(c.id, true)} disabled={busy}><Check size={14} /></Btn><Btn variant="danger" onClick={() => respondCoach(c.id, false)} disabled={busy}><X size={14} /></Btn></div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Coaching staff</div>
+            {coachRoster.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No coaching staff yet.</div>}
+            {coachRoster.map((c) => (
+              <div key={c.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--turf-900)", border: "1px solid #6FBFAE", display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={15} color="#6FBFAE" /></div>
+                <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.specialization || "Coach"}{c.yearsExperience && ` \u00b7 ${c.yearsExperience} yrs experience`}</div></div>
+              </div>
+            ))}
+          </div>
         </TeamSheetCard>
       )}
 
@@ -647,7 +750,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 
       {tab === "news" && (
         <TeamSheetCard>
-          <Field label="Club news or announcement"><textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Training moved to Thursday 6pm this week." /></Field>
+          <Field label="Team news or announcement"><textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Training moved to Thursday 6pm this week." /></Field>
           <Btn onClick={postNews} disabled={!newsText.trim() || posting}>{posting ? <Loader2 size={14} className="spin" /> : <Newspaper size={14} />} Post</Btn>
         </TeamSheetCard>
       )}
@@ -666,8 +769,14 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
         </TeamSheetCard>
       )}
 
-      {tab === "club info" && (
+      {tab === "team info" && (
         <TeamSheetCard>
+          <Field label="Sport">
+            <select style={inputStyle} value={bioDraft.sport} onChange={(e) => setBioDraft({ ...bioDraft, sport: e.target.value })}>
+              <option value="">Select a sport</option>
+              {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </Field>
           <Field label="Founded"><input style={inputStyle} value={bioDraft.founded} onChange={(e) => setBioDraft({ ...bioDraft, founded: e.target.value })} placeholder="1998" /></Field>
           <Field label="Current log / standing"><textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={bioDraft.currentLog} onChange={(e) => setBioDraft({ ...bioDraft, currentLog: e.target.value })} placeholder={"1. Riverside FC - 24pts\n2. Northside United - 21pts"} /></Field>
           <Field label="Add a trophy">
@@ -677,7 +786,119 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
             </div>
           </Field>
           {trophies.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>{trophies.map((t, i) => <Pill key={i} tone="amber">{t} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setTrophies(trophies.filter((_, idx) => idx !== i))} /></Pill>)}</div>}
-          <Btn onClick={saveBio} disabled={savingBio}>{savingBio ? <Loader2 size={14} className="spin" /> : "Save club info"}</Btn>
+          <Btn onClick={saveBio} disabled={savingBio}>{savingBio ? <Loader2 size={14} className="spin" /> : "Save team info"}</Btn>
+        </TeamSheetCard>
+      )}
+    </div>
+  );
+}
+
+// ---------- Coach view ----------
+function CoachView({ profile, refresh, clubs }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], ...profile });
+  const [achInput, setAchInput] = useState("");
+  const [showJoin, setShowJoin] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setDraft({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], ...profile }), [profile.id]);
+
+  const save = async () => {
+    setBusy(true);
+    try { await api.updateProfile(profile.id, draft, getOwnerToken(profile.id)); setEditing(false); await refresh(); }
+    catch (e) { alert(e.message); }
+    setBusy(false);
+  };
+
+  const requestJoin = async (teamId) => {
+    setBusy(true);
+    try { await api.sendCoachJoinRequest(profile.id, getOwnerToken(profile.id), teamId); setShowJoin(false); await refresh(); }
+    catch (e) { alert(e.message); }
+    setBusy(false);
+  };
+
+  const upgrade = async () => { setBusy(true); try { await api.upgradeProfile(profile.id, getOwnerToken(profile.id)); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
+
+  const myTeam = profile.teamId ? clubs.find((c) => c.id === profile.teamId) : null;
+  const pendingTeam = profile.pendingTeamId ? clubs.find((c) => c.id === profile.pendingTeamId) : null;
+
+  return (
+    <div>
+      <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <div style={{ width: 52, height: 52, borderRadius: 8, background: "var(--turf-900)", border: "1px solid #6FBFAE", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><ClipboardList size={24} color="#6FBFAE" /></div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
+            <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.specialization || "Specialization not set"}</div>
+            <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {myTeam ? <Pill tone="amber">{myTeam.name}</Pill> : pendingTeam ? <Pill>Request sent \u00b7 {pendingTeam.name}</Pill> : <Pill>Unattached</Pill>}
+            </div>
+          </div>
+          <Btn variant="ghost" onClick={() => setEditing((v) => !v)}>{editing ? "Cancel" : "Edit"}</Btn>
+        </div>
+
+        {editing ? (
+          <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
+            <Field label="Qualifications"><input style={inputStyle} value={draft.qualifications} onChange={(e) => setDraft({ ...draft, qualifications: e.target.value })} placeholder="UEFA A License, Level 3 Rugby Coaching" /></Field>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Field label="Years of experience"><input style={inputStyle} value={draft.yearsExperience} onChange={(e) => setDraft({ ...draft, yearsExperience: e.target.value })} placeholder="8" /></Field>
+              <Field label="Specialization"><input style={inputStyle} value={draft.specialization} onChange={(e) => setDraft({ ...draft, specialization: e.target.value })} placeholder="Attack, set-pieces, fitness" /></Field>
+            </div>
+            <Field label="Add achievement">
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={inputStyle} value={achInput} onChange={(e) => setAchInput(e.target.value)} placeholder="Promoted club to Division 1, 2024" />
+                <Btn onClick={() => { if (achInput.trim()) { setDraft({ ...draft, achievements: [...draft.achievements, achInput.trim()] }); setAchInput(""); } }}><Plus size={14} /></Btn>
+              </div>
+            </Field>
+            {draft.achievements.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                {draft.achievements.map((a, i) => (
+                  <Pill key={i} tone="amber">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, achievements: draft.achievements.filter((_, idx) => idx !== i) })} /></Pill>
+                ))}
+              </div>
+            )}
+            <Btn onClick={save} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : "Save changes"}</Btn>
+          </div>
+        ) : (
+          <>
+            {profile.bio && <div style={{ marginTop: 14, fontSize: 14, color: "var(--chalk)" }}>{profile.bio}</div>}
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12, color: "var(--line-grey)", flexWrap: "wrap" }}>
+              {profile.qualifications && <span>{profile.qualifications}</span>}
+              {profile.yearsExperience && <span>{profile.yearsExperience} yrs experience</span>}
+            </div>
+            {profile.achievements?.length > 0 && (
+              <div style={{ marginTop: 14, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {profile.achievements.map((a, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{a}</Pill>)}
+              </div>
+            )}
+          </>
+        )}
+      </TeamSheetCard>
+
+      {!myTeam && !pendingTeam && (
+        <TeamSheetCard>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}>Join a team's coaching staff</div>
+            <Btn variant="ghost" onClick={() => setShowJoin((v) => !v)}>{showJoin ? "Close" : "Browse teams"}</Btn>
+          </div>
+          {showJoin && (
+            <div style={{ marginTop: 12 }}>
+              {clubs.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13 }}>No teams on Pitchside yet.</div>}
+              {clubs.map((c) => (
+                <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderTop: "1px solid var(--turf-500)" }}>
+                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.location} \u00b7 {c.level}</div></div>
+                  <Btn onClick={() => requestJoin(c.id)} disabled={busy}>Request</Btn>
+                </div>
+              ))}
+            </div>
+          )}
+        </TeamSheetCard>
+      )}
+      {pendingTeam && (
+        <TeamSheetCard>
+          <div style={{ fontSize: 13, color: "var(--line-grey)" }}>Waiting for <strong style={{ color: "var(--chalk)" }}>{pendingTeam.name}</strong> to accept your request.</div>
         </TeamSheetCard>
       )}
     </div>
@@ -718,7 +939,7 @@ function SupporterProfileCard({ profile, refresh, clubs }) {
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <Field label="Your supporter story"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.career} onChange={(e) => setDraft({ ...draft, career: e.target.value })} placeholder="Been following Riverside since 2015..." /></Field>
             <Field label="Teams you support">
-              {clubs.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No clubs on Pitchside yet.</div>}
+              {clubs.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No teams on Pitchside yet.</div>}
               {clubs.map((c) => (
                 <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0" }}>
                   <input type="checkbox" checked={draft.supportedClubIds.includes(c.id)} onChange={() => toggleClub(c.id)} /> {c.name}
@@ -781,10 +1002,21 @@ function ScoutView({ profile, refresh, allProfiles }) {
   const [busy, setBusy] = useState(false);
   const [grants, setGrants] = useState([]);
   const [query, setQuery] = useState("");
+  const [positionFilter, setPositionFilter] = useState("");
+  const [regionFilter, setRegionFilter] = useState("");
+  const [attributeFilter, setAttributeFilter] = useState("");
+  const [sportFilter, setSportFilter] = useState("");
   const [chatWith, setChatWith] = useState(null);
 
   const players = allProfiles.filter((p) => p.type === "player");
-  const filtered = players.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
+  const filtered = players.filter((p) => {
+    const nameOk = p.name.toLowerCase().includes(query.toLowerCase());
+    const positionOk = !positionFilter || (p.positions || p.position || "").toLowerCase().includes(positionFilter.toLowerCase());
+    const regionOk = !regionFilter || (p.region || "").toLowerCase().includes(regionFilter.toLowerCase());
+    const attributeOk = !attributeFilter || (p.attributes || []).some((a) => a.toLowerCase().includes(attributeFilter.toLowerCase()));
+    const sportOk = !sportFilter || p.sport === sportFilter;
+    return nameOk && positionOk && regionOk && attributeOk && sportOk;
+  });
 
   const loadGrants = useCallback(async () => { try { setGrants(await api.listAccessRequestsFor(profile.id)); } catch {} }, [profile.id]);
   useEffect(() => { loadGrants(); }, [loadGrants]);
@@ -852,17 +1084,42 @@ function ScoutView({ profile, refresh, allProfiles }) {
       </TeamSheetCard>
 
       <TeamSheetCard>
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 10 }}>Find players</div>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 10 }}>Talent discovery</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, background: "var(--turf-900)", border: "1px solid var(--turf-500)", borderRadius: 6, padding: "6px 10px" }}>
           <Search size={14} color="var(--line-grey)" />
           <input style={{ ...inputStyle, border: "none", padding: 0, background: "transparent" }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search players by name" />
         </div>
-        {filtered.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No players found.</div>}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 140px" }}>
+            <Field label="Sport">
+              <select style={inputStyle} value={sportFilter} onChange={(e) => setSportFilter(e.target.value)}>
+                <option value="">Any sport</option>
+                {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div style={{ flex: "1 1 140px" }}><Field label="Position"><input style={inputStyle} value={positionFilter} onChange={(e) => setPositionFilter(e.target.value)} placeholder="e.g. Fly-half" /></Field></div>
+          <div style={{ flex: "1 1 140px" }}><Field label="Region"><input style={inputStyle} value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} placeholder="e.g. Gauteng" /></Field></div>
+          <div style={{ flex: "1 1 140px" }}><Field label="Attribute"><input style={inputStyle} value={attributeFilter} onChange={(e) => setAttributeFilter(e.target.value)} placeholder="e.g. two-footed" /></Field></div>
+        </div>
+        {filtered.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No players match those filters.</div>}
         {filtered.map((p) => {
           const status = statusFor(p.id);
           return (
-            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}><JerseyBadge number={p.jerseyNumber} size={28} /><div style={{ fontSize: 14 }}>{p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {p.positions || p.position}</span></div></div>
+            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)", gap: 10 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <JerseyBadge number={p.jerseyNumber} size={28} />
+                <div style={{ fontSize: 14 }}>
+                  {p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {p.positions || p.position}</span>
+                  {p.sport && <span style={{ color: "var(--line-grey)" }}> \u00b7 {p.sport}</span>}
+                  {p.region && <span style={{ color: "var(--line-grey)" }}> \u00b7 {p.region}</span>}
+                  {p.attributes?.length > 0 && (
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                      {p.attributes.map((a, i) => <Pill key={i} tone="blue">{a}</Pill>)}
+                    </div>
+                  )}
+                </div>
+              </div>
               {status === "accepted" ? <Pill tone="amber">Linked</Pill> : status === "pending" ? <Pill>Requested</Pill> : <Btn onClick={() => requestAccess(p.id)} disabled={busy}>Request access</Btn>}
             </div>
           );
@@ -901,6 +1158,107 @@ function PostCard({ post }) {
         </div>
       )}
     </TeamSheetCard>
+  );
+}
+
+// ---------- Admin view ----------
+function StatBlock({ label, value, tone }) {
+  return (
+    <div>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 26, fontWeight: 700, color: tone || "var(--floodlight)" }}>{value ?? 0}</div>
+      <div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>{label}</div>
+    </div>
+  );
+}
+
+function AdminView({ profile }) {
+  const [stats, setStats] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try { setStats(await api.adminStats(profile.id, getOwnerToken(profile.id))); }
+    catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [profile.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "var(--line-grey)" }}><Loader2 className="spin" size={20} /></div>;
+  if (error) return <TeamSheetCard><div style={{ color: "var(--score)", fontSize: 13 }}>{error}</div></TeamSheetCard>;
+  if (!stats) return null;
+
+  const totalProfiles = Object.values(stats.profileCounts).reduce((a, b) => a + b, 0);
+
+  return (
+    <div>
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700 }}>Admin dashboard</div>
+          <Btn variant="ghost" onClick={load}>Refresh</Btn>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--line-grey)", marginTop: 4 }}>
+          Read-only usage snapshot from what's actually stored - no separate analytics/event tracking is wired up yet.
+        </div>
+      </TeamSheetCard>
+
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 14 }}>Profiles ({totalProfiles} total)</div>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+          {Object.entries(TYPE_META).filter(([k]) => k !== "admin").map(([key, meta]) => (
+            <StatBlock key={key} label={meta.label} value={stats.profileCounts[key] || 0} />
+          ))}
+        </div>
+      </TeamSheetCard>
+
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 14 }}>Trial &amp; billing</div>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <StatBlock label="On trial" value={stats.planCounts.trial || 0} />
+          <StatBlock label="Paid" value={stats.planCounts.paid || 0} tone="var(--score)" />
+          <StatBlock label="Trial expired" value={stats.trialExpiredCount} tone="var(--score)" />
+        </div>
+      </TeamSheetCard>
+
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 14 }}>Activity</div>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <StatBlock label="Total posts" value={stats.totalPosts} />
+          <StatBlock label="Lineups" value={stats.postCounts.lineup || 0} />
+          <StatBlock label="News" value={stats.postCounts.news || 0} />
+          <StatBlock label="Matchday posts" value={stats.postCounts.matchday || 0} />
+          <StatBlock label="Live matches now" value={stats.liveMatchCounts.live || 0} tone="var(--score)" />
+          <StatBlock label="Matches ended" value={stats.liveMatchCounts.ended || 0} />
+        </div>
+      </TeamSheetCard>
+
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 14 }}>Pending requests - where people might be getting stuck</div>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <StatBlock label="Player join requests" value={stats.pendingPlayerRequests} />
+          <StatBlock label="Coach join requests" value={stats.pendingCoachRequests} />
+          <StatBlock label="Scout access requests" value={stats.accessGrantCounts.pending || 0} />
+        </div>
+        <div style={{ fontSize: 12, color: "var(--line-grey)", marginTop: 10 }}>
+          High numbers here mean requests are piling up unanswered - possibly worth a reminder notification feature.
+        </div>
+      </TeamSheetCard>
+
+      <TeamSheetCard>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 10 }}>Recent signups</div>
+        {stats.recentSignups.map((s) => {
+          const meta = TYPE_META[s.type] || TYPE_META.supporter;
+          return (
+            <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderTop: "1px solid var(--turf-500)" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}><meta.icon size={13} color={meta.color} />{s.name}</div>
+              <div style={{ fontSize: 11, color: "var(--line-grey)" }}>{fmtDate(s.createdAt)}</div>
+            </div>
+          );
+        })}
+      </TeamSheetCard>
+    </div>
   );
 }
 
@@ -1002,6 +1360,8 @@ export default function App() {
         {nav === "profile" && activeProfile.type === "player" && <PlayerView profile={activeProfile} refresh={refresh} clubs={clubs} />}
         {nav === "profile" && activeProfile.type === "club" && <ClubView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} onPost={makePost} />}
         {nav === "profile" && activeProfile.type === "scout" && <ScoutView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} />}
+        {nav === "profile" && activeProfile.type === "coach" && <CoachView profile={activeProfile} refresh={refresh} clubs={clubs} />}
+        {nav === "profile" && activeProfile.type === "admin" && <AdminView profile={activeProfile} />}
         {nav === "profile" && activeProfile.type === "supporter" && (
           <div>
             <SupporterProfileCard profile={activeProfile} refresh={refresh} clubs={clubs} />

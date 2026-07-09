@@ -21,6 +21,11 @@ export const api = {
     req("/join-requests", { method: "POST", body: JSON.stringify({ playerId, playerOwnerToken, clubId }) }),
   respondToJoinRequest: (clubId, clubOwnerToken, playerId, accept) =>
     req("/join-requests/respond", { method: "POST", body: JSON.stringify({ clubId, clubOwnerToken, playerId, accept }) }),
+
+  sendCoachJoinRequest: (coachId, coachOwnerToken, teamId) =>
+    req("/coach-join-requests", { method: "POST", body: JSON.stringify({ coachId, coachOwnerToken, teamId }) }),
+  respondToCoachJoinRequest: (teamId, teamOwnerToken, coachId, accept) =>
+    req("/coach-join-requests/respond", { method: "POST", body: JSON.stringify({ teamId, teamOwnerToken, coachId, accept }) }),
   listPosts: () => req("/posts"),
   createPost: (post, ownerToken) => req("/posts", { method: "POST", body: JSON.stringify({ post, ownerToken }) }),
   upgradeProfile: (id, ownerToken) => req(`/profiles/${id}/upgrade`, { method: "POST", body: JSON.stringify({ ownerToken }) }),
@@ -42,6 +47,9 @@ export const api = {
     req(`/live-matches/${matchId}/score`, { method: "POST", body: JSON.stringify({ supporterId, supporterOwnerToken, score }) }),
   endLiveMatch: (matchId, clubOwnerToken) =>
     req(`/live-matches/${matchId}/end`, { method: "POST", body: JSON.stringify({ clubOwnerToken }) }),
+
+  adminStats: (profileId, ownerToken) =>
+    req(`/admin/stats?profileId=${encodeURIComponent(profileId)}&ownerToken=${encodeURIComponent(ownerToken)}`),
 };
 
 // ---- device-local identity (this browser's known profiles + their secrets) ----

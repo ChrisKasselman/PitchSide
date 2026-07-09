@@ -1,11 +1,12 @@
 # Pitchside
 
-A social network for players, clubs/schools, supporters, and scouts/agents.
-Player, club, supporter, and scout profiles all link together: players
-request to join a club, clubs accept and publish lineups, supporters follow
-along and post matchday updates, scouts request access to a player's
-contract/contact details and can chat once accepted. Clubs can also go live
-during a match and let supporters crowd-submit the score in real time.
+A social network for players, teams, supporters, coaches, and scouts/agents.
+Player, team, supporter, coach, and scout profiles all link together: players
+and coaches request to join a team, the team accepts and publishes lineups,
+supporters follow along and post matchday updates, scouts search for talent
+and request access to a player's contract/contact details, chatting once
+accepted. Teams can also go live during a match and let supporters
+crowd-submit the score in real time.
 
 This is a working prototype, not a finished product. In particular:
 - There's no real login yet. Each profile is protected by a random "owner
@@ -28,22 +29,84 @@ This is a working prototype, not a finished product. In particular:
 
 ## What's built
 
-- **Player profile:** bio (weight, height, age, hobbies), position(s), career
-  history, stats (games played, tries, conversions, player-of-the-match),
-  achievements, join-a-club flow, contract/salary/contact fields (only
-  surfaced to scouts once access is granted)
-- **Club/school profile:** founding year, trophies, current log/standing,
-  roster management, lineup publishing, news posts, live match hosting
-- **Supporter profile:** bio, supporter story, following multiple clubs,
+- **Player profile:** bio (weight, height, age, hobbies), sport (Rugby,
+  Football, Cricket, Netball, or Hockey), position(s), region, career
+  history, sport-aware stats (labels change based on chosen sport - e.g.
+  "Tries/Conversions" for Rugby, "Goals/Assists" for Football, "Runs/Wickets"
+  for Cricket), achievements, searchable attributes (e.g. "two-footed"),
+  join-a-team flow, contract/salary/contact fields (only surfaced to scouts
+  once access is granted)
+- **Team profile:** (internally still keyed as "club" in the data - see note
+  below) sport, founding year, trophies, current log/standing, player roster
+  management, coaching staff roster and requests, lineup publishing, news
+  posts, live match hosting
+- **Supporter profile:** bio, supporter story, following multiple teams,
   matchday photo/score uploads, live score submissions
-- **Scout/agent profile:** bio, achievements, player search, access-request
-  flow gated by player approval, private player details once accepted,
-  direct chat with linked players
-- **Live matches:** a club goes live, supporters submit scores, the
+- **Coach profile:** bio, qualifications, years of experience, specialization,
+  achievements, request to join a team's coaching staff (separate from the
+  player roster, own accept/decline flow)
+- **Scout/agent profile:** bio, achievements, talent discovery (search/filter
+  by name, sport, position, region, and player-listed attributes),
+  access-request flow gated by player approval, private player details once
+  accepted, direct chat with linked players
+- **Live matches:** a team goes live, supporters submit scores, the
   most-submitted score becomes the displayed live score, ending the match
   auto-posts the final score to the feed
 - **Trial/pricing:** 30-day trial per profile type, soft paywall after expiry,
   demo "subscribe" button (see billing note above)
+- **Admin / super users:** read-only usage dashboard (profile counts, trial
+  vs paid, post activity, pending requests, recent signups). Admin accounts
+  never see a trial banner and are never blocked by the paywall. See "Admin
+  accounts" section below for how to create one - it's deliberately not
+  reachable through the normal sign-up flow.
+
+**Note on "Team" vs "club":** the person-facing label is "Team" everywhere in
+the UI, but the underlying `type` value stored in the database is still
+`"club"` for this profile type, to avoid a data migration on profiles that
+already exist. Likewise, player stats are stored under the original field
+names (`tries`, `conversions`, etc.) regardless of sport, and only the
+*displayed label* changes - so a cricket player's "Runs" are technically
+sitting in a field called `tries` under the hood. Both are deliberate
+trade-offs to avoid migrating live data; if you'd rather have this fully
+renamed at the data level, that's a follow-up migration, just flag it.
+
+## Admin accounts
+
+Admin accounts bypass the trial/paywall entirely and unlock a read-only
+stats dashboard. Because that's powerful, there's no "Admin" option in the
+public sign-up screen - creating one requires a secret only you control.
+
+**1. Set the secret in Railway:**
+Go to your `PitchSide` service → Variables → add a new variable:
+- Name: `ADMIN_SECRET`
+- Value: any long random string you choose (e.g. generate one at
+  [1password.com/password-generator](https://1password.com/password-generator)
+  or similar)
+
+Save it - Railway will redeploy automatically.
+
+**2. Create your admin profile** by running this from your own machine
+(replace the URL, secret, and name):
+
+```bash
+curl -X POST https://your-app.up.railway.app/api/admin/create-profile \
+  -H "Content-Type: application/json" \
+  -H "x-admin-secret: YOUR_ADMIN_SECRET" \
+  -d '{"profile":{"id":"admin_chris","name":"Chris"},"ownerToken":"choose-a-long-random-owner-token-here"}'
+```
+
+Keep the `ownerToken` you chose - it's effectively your admin password.
+
+**3. Load it into your browser.** Open your Pitchside site, open the browser
+dev console (F12), and run:
+
+```js
+localStorage.setItem("pitchside:my-profiles", JSON.stringify([{ id: "admin_chris", name: "Chris", type: "admin", ownerToken: "the-owner-token-you-chose" }]));
+localStorage.setItem("pitchside:active-profile-id", "admin_chris");
+```
+
+Refresh the page - you should land directly on the admin dashboard instead
+of onboarding.
 
 ## Project structure
 

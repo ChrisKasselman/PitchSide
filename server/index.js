@@ -7,13 +7,14 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "8mb" }));
 
-const PRICING = { supporter: 25, player: 50, club: 250, scout: 500 };
+const PRICING = { supporter: 25, player: 50, club: 250, scout: 500, coach: 50 };
 const TRIAL_DAYS = 30;
 
 const rowToProfile = (row) => ({
   ...row.payload,
   id: row.id,
   plan: row.plan,
+  isAdmin: row.is_admin,
   trialStartedAt: row.trial_started_at,
   trialDaysLeft: Math.max(0, TRIAL_DAYS - Math.floor((Date.now() - new Date(row.trial_started_at).getTime()) / 86400000)),
   monthlyPrice: PRICING[row.type] ?? null,
@@ -27,6 +28,7 @@ async function getProfileRow(id) {
 }
 
 function trialExpired(row) {
+  if (row.is_admin) return false; // super users never expire and never pay
   if (row.plan !== "trial") return false; // paid plans never expire here
   const daysUsed = (Date.now() - new Date(row.trial_started_at).getTime()) / 86400000;
   return daysUsed > TRIAL_DAYS;
@@ -160,6 +162,60 @@ app.post("/api/join-requests/respond", async (req, res) => {
     }
     res.json({ club: rowToProfile({ ...clubRow, payload: club }), player: rowToProfile({ ...playerRow, payload: player }) });
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not respond to join request." }); }
+});
+
+// ---- coach <-> team join requests ----
+
+app.post("/api/coach-join-requests", async (req, res) => {
+  const { coachId, coachOwnerToken, teamId } = req.body;
+  try {
+    const coachRow = await requireActiveTrialOrPaid(coachId, res);
+    if (!coachRow) return;
+    if (coachRow.owner_token !== coachOwnerToken) return res.status(403).json({ error: "You don't own this coach profile." });
+    const teamRow = await getProfileRow(teamId);
+    if (!teamRow) return res.status(404).json({ error: "Team not found." });
+
+    const coach = coachRow.payload;
+    const team = teamRow.payload;
+    const coachPending = team.coachPending || [];
+    if (!coachPending.includes(coachId)) team.coachPending = [...coachPending, coachId];
+    coach.pendingTeamId = teamId;
+
+    await pool.query("UPDATE profiles SET payload = $1, updated_at = now() WHERE id = $2", [team, teamId]);
+    await pool.query("UPDATE profiles SET payload = $1, updated_at = now() WHERE id = $2", [coach, coachId]);
+    res.json({ team: rowToProfile({ ...teamRow, payload: team }), coach: rowToProfile({ ...coachRow, payload: coach }) });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not send coach join request." }); }
+});
+
+app.post("/api/coach-join-requests/respond", async (req, res) => {
+  const { teamId, teamOwnerToken, coachId, accept } = req.body;
+  try {
+    const teamRow = await getProfileRow(teamId);
+    const coachRow = await getProfileRow(coachId);
+    if (!teamRow || !coachRow) return res.status(404).json({ error: "Coach or team not found." });
+    if (teamRow.owner_token !== teamOwnerToken) return res.status(403).json({ error: "You don't own this team profile." });
+
+    const team = teamRow.payload;
+    const coach = coachRow.payload;
+    team.coachPending = (team.coachPending || []).filter((id) => id !== coachId);
+    if (accept) team.coachRoster = [...(team.coachRoster || []), coachId];
+    coach.pendingTeamId = null;
+    if (accept) coach.teamId = teamId;
+
+    await pool.query("UPDATE profiles SET payload = $1, updated_at = now() WHERE id = $2", [team, teamId]);
+    await pool.query("UPDATE profiles SET payload = $1, updated_at = now() WHERE id = $2", [coach, coachId]);
+
+    if (accept) {
+      const post = {
+        id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        authorId: team.id, authorName: team.name, authorType: "club",
+        kind: "news", title: `${coach.name} joined ${team.name} as coach`, body: "",
+        timestamp: new Date().toISOString(),
+      };
+      await pool.query("INSERT INTO posts (id, author_id, kind, payload) VALUES ($1, $2, $3, $4)", [post.id, post.authorId, post.kind, post]);
+    }
+    res.json({ team: rowToProfile({ ...teamRow, payload: team }), coach: rowToProfile({ ...coachRow, payload: coach }) });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not respond to coach join request." }); }
 });
 
 // ---- scout/agent <-> player access grants ----
@@ -357,6 +413,82 @@ app.post("/api/posts", async (req, res) => {
     await pool.query("INSERT INTO posts (id, author_id, kind, payload) VALUES ($1, $2, $3, $4)", [post.id, post.authorId, post.kind, post]);
     res.status(201).json(post);
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not create post." }); }
+});
+
+// ---- admin / super users ----
+// These endpoints are deliberately NOT reachable through the normal onboarding
+// flow. Creating an admin requires a server secret (ADMIN_SECRET, set as a
+// Railway environment variable, never shipped to the client bundle), so a
+// regular visitor can never grant themselves admin access.
+
+app.post("/api/admin/create-profile", async (req, res) => {
+  try {
+    if (!process.env.ADMIN_SECRET) {
+      return res.status(500).json({ error: "ADMIN_SECRET is not configured on the server. Set it in Railway before creating admin accounts." });
+    }
+    const suppliedSecret = req.get("x-admin-secret");
+    if (!suppliedSecret || suppliedSecret !== process.env.ADMIN_SECRET) {
+      return res.status(403).json({ error: "Invalid admin secret." });
+    }
+    const { profile, ownerToken } = req.body;
+    if (!profile?.id || !profile?.name || !ownerToken) {
+      return res.status(400).json({ error: "Missing profile fields." });
+    }
+    const adminProfile = { ...profile, type: "admin" };
+    await pool.query(
+      `INSERT INTO profiles (id, type, name, owner_token, payload, plan, is_admin) VALUES ($1, 'admin', $2, $3, $4, 'paid', true)`,
+      [adminProfile.id, adminProfile.name, ownerToken, adminProfile]
+    );
+    const row = await getProfileRow(adminProfile.id);
+    res.status(201).json(rowToProfile(row));
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not create admin profile." }); }
+});
+
+async function requireAdmin(profileId, ownerToken, res) {
+  const row = await getProfileRow(profileId);
+  if (!row) { res.status(404).json({ error: "Profile not found." }); return null; }
+  if (row.owner_token !== ownerToken || !row.is_admin) { res.status(403).json({ error: "Admin access required." }); return null; }
+  return row;
+}
+
+app.get("/api/admin/stats", async (req, res) => {
+  const { profileId, ownerToken } = req.query;
+  const adminRow = await requireAdmin(profileId, ownerToken, res);
+  if (!adminRow) return;
+  try {
+    const [byType, byPlan, postsByKind, liveByStatus, grantsByStatus, recent, allTeams] = await Promise.all([
+      pool.query("SELECT type, count(*)::int AS count FROM profiles GROUP BY type"),
+      pool.query("SELECT plan, count(*)::int AS count FROM profiles WHERE is_admin = false GROUP BY plan"),
+      pool.query("SELECT kind, count(*)::int AS count FROM posts GROUP BY kind"),
+      pool.query("SELECT status, count(*)::int AS count FROM live_matches GROUP BY status"),
+      pool.query("SELECT status, count(*)::int AS count FROM access_grants GROUP BY status"),
+      pool.query("SELECT id, name, type, created_at FROM profiles ORDER BY created_at DESC LIMIT 15"),
+      pool.query("SELECT payload FROM profiles WHERE type = 'club'"),
+    ]);
+
+    const expiredTrials = await pool.query(
+      "SELECT count(*)::int AS count FROM profiles WHERE is_admin = false AND plan = 'trial' AND trial_started_at < now() - interval '30 days'"
+    );
+
+    let pendingPlayerRequests = 0, pendingCoachRequests = 0;
+    for (const row of allTeams.rows) {
+      pendingPlayerRequests += (row.payload.pending || []).length;
+      pendingCoachRequests += (row.payload.coachPending || []).length;
+    }
+
+    res.json({
+      profileCounts: Object.fromEntries(byType.rows.map((r) => [r.type, r.count])),
+      planCounts: Object.fromEntries(byPlan.rows.map((r) => [r.plan, r.count])),
+      trialExpiredCount: expiredTrials.rows[0].count,
+      postCounts: Object.fromEntries(postsByKind.rows.map((r) => [r.kind, r.count])),
+      totalPosts: postsByKind.rows.reduce((sum, r) => sum + r.count, 0),
+      liveMatchCounts: Object.fromEntries(liveByStatus.rows.map((r) => [r.status, r.count])),
+      accessGrantCounts: Object.fromEntries(grantsByStatus.rows.map((r) => [r.status, r.count])),
+      pendingPlayerRequests,
+      pendingCoachRequests,
+      recentSignups: recent.rows.map((r) => ({ id: r.id, name: r.name, type: r.type, createdAt: r.created_at })),
+    });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not load admin stats." }); }
 });
 
 // ---- static frontend ----

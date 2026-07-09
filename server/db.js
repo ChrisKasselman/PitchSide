@@ -29,6 +29,9 @@ async function initSchema() {
   // can never edit its own trial state.
   await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ NOT NULL DEFAULT now();`);
   await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'trial';`);
+  // Real DB column (not payload) so it can never be set by a client request -
+  // only by the protected /api/admin/create-profile endpoint using the server secret.
+  await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS posts (
       id TEXT PRIMARY KEY,
