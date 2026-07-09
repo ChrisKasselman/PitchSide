@@ -1,0 +1,84 @@
+const { Pool } = require("pg");
+
+if (!process.env.DATABASE_URL) {
+  console.warn("DATABASE_URL is not set. Add a Postgres database in Railway and it will be provided automatically.");
+}
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("railway")
+    ? { rejectUnauthorized: false }
+    : process.env.PGSSLMODE === "require"
+    ? { rejectUnauthorized: false }
+    : false,
+});
+
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS profiles (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      owner_token TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  // Trial/plan tracking lives in real columns (not the payload) so the client
+  // can never edit its own trial state.
+  await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ NOT NULL DEFAULT now();`);
+  await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'trial';`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS posts (
+      id TEXT PRIMARY KEY,
+      author_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS posts_created_at_idx ON posts (created_at DESC);`);
+
+  // Scout/agent <-> player access grants. A scout must be granted access
+  // before they can see a player's contract/contact/salary info or chat.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS access_grants (
+      id TEXT PRIMARY KEY,
+      scout_id TEXT NOT NULL,
+      player_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (scout_id, player_id)
+    );
+  `);
+
+  // Direct messages, only usable between a scout and a player once a grant is accepted.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      from_id TEXT NOT NULL,
+      to_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS messages_pair_idx ON messages (from_id, to_id, created_at);`);
+
+  // Live matches: a club activates one, supporters submit score guesses,
+  // the most-submitted score becomes the displayed "live score".
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS live_matches (
+      id TEXT PRIMARY KEY,
+      club_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'live',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS live_matches_status_idx ON live_matches (status, created_at DESC);`);
+}
+
+module.exports = { pool, initSchema };
