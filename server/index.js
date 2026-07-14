@@ -499,6 +499,25 @@ app.get("/api/posts", async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not load posts." }); }
 });
 
+// Friends-only feed: caller's own posts + posts from accepted friends.
+app.get("/api/posts/friends", authenticate, async (req, res) => {
+  try {
+    const me = await getMyProfileRow(req.userId);
+    if (!me) return res.json([]);
+    const { rows: friendRows } = await pool.query(
+      `SELECT requester_id, addressee_id FROM friendships WHERE (requester_id = $1 OR addressee_id = $1) AND status = 'accepted'`,
+      [me.id]
+    );
+    const friendIds = friendRows.map((r) => (r.requester_id === me.id ? r.addressee_id : r.requester_id));
+    const authorIds = [me.id, ...friendIds];
+    const { rows } = await pool.query(
+      `SELECT id, payload FROM posts WHERE author_id = ANY($1) ORDER BY created_at DESC LIMIT 200`,
+      [authorIds]
+    );
+    res.json(rows.map(rowToPost));
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not load friends feed." }); }
+});
+
 // authorId/authorName/authorType are filled in from the caller's own profile
 // server-side, not trusted from the client - so nobody can post as someone else.
 app.post("/api/posts", authenticate, async (req, res) => {
@@ -514,6 +533,78 @@ app.post("/api/posts", authenticate, async (req, res) => {
     await pool.query("INSERT INTO posts (id, author_id, kind, payload) VALUES ($1, $2, $3, $4)", [post.id, post.authorId, post.kind, post]);
     res.status(201).json(post);
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not create post." }); }
+});
+
+// ---- friends (general connection between any two profiles) ----
+
+app.post("/api/friend-requests", authenticate, async (req, res) => {
+  try {
+    const me = await requireCallerProfile(req, res);
+    if (!me) return;
+    const { toId } = req.body;
+    if (!toId || toId === me.id) return res.status(400).json({ error: "Invalid recipient." });
+    const target = await getProfileRow(toId);
+    if (!target) return res.status(404).json({ error: "Profile not found." });
+
+    const existing = await pool.query(
+      `SELECT * FROM friendships WHERE (requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)`,
+      [me.id, toId]
+    );
+    if (existing.rows.length) {
+      const status = existing.rows[0].status;
+      if (status === "accepted") return res.status(409).json({ error: "You're already friends." });
+      if (status === "pending") return res.status(409).json({ error: "A request is already pending between you two." });
+    }
+
+    await pool.query(
+      `INSERT INTO friendships (id, requester_id, addressee_id, status) VALUES ($1, $2, $3, 'pending')`,
+      [uid(), me.id, toId]
+    );
+    res.status(201).json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not send friend request." }); }
+});
+
+app.post("/api/friend-requests/respond", authenticate, async (req, res) => {
+  try {
+    const me = await getMyProfileRow(req.userId);
+    if (!me) return res.status(404).json({ error: "You don't have a profile yet." });
+    const { fromId, accept } = req.body;
+    const { rows } = await pool.query(`SELECT * FROM friendships WHERE requester_id = $1 AND addressee_id = $2 AND status = 'pending'`, [fromId, me.id]);
+    if (!rows.length) return res.status(404).json({ error: "No pending request from that profile." });
+    await pool.query(`UPDATE friendships SET status = $1, updated_at = now() WHERE id = $2`, [accept ? "accepted" : "declined", rows[0].id]);
+    res.json({ ok: true, status: accept ? "accepted" : "declined" });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not respond to friend request." }); }
+});
+
+app.post("/api/friends/remove", authenticate, async (req, res) => {
+  try {
+    const me = await getMyProfileRow(req.userId);
+    if (!me) return res.status(404).json({ error: "You don't have a profile yet." });
+    const { friendId } = req.body;
+    await pool.query(
+      `DELETE FROM friendships WHERE (requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)`,
+      [me.id, friendId]
+    );
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not remove friend." }); }
+});
+
+app.get("/api/friends/mine", authenticate, async (req, res) => {
+  try {
+    const me = await getMyProfileRow(req.userId);
+    if (!me) return res.json([]);
+    const { rows } = await pool.query(
+      `SELECT * FROM friendships WHERE requester_id = $1 OR addressee_id = $1 ORDER BY created_at DESC`,
+      [me.id]
+    );
+    res.json(rows.map((r) => ({
+      id: r.id,
+      otherId: r.requester_id === me.id ? r.addressee_id : r.requester_id,
+      direction: r.requester_id === me.id ? "outgoing" : "incoming",
+      status: r.status,
+      createdAt: r.created_at,
+    })));
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not load friends." }); }
 });
 
 // ---- static frontend ----

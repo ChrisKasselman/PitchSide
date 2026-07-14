@@ -77,6 +77,12 @@ database doesn't scale indefinitely.
   vs paid, post activity, pending requests, recent signups). Admin accounts
   never see a trial banner and are never blocked by the paywall. See "Admin
   accounts" below.
+- **Friends:** a general-purpose connection between any two profiles,
+  separate from the specific relationships above (roster, scout access,
+  coaching staff). Send a request, the other person accepts or declines,
+  either side can remove the connection later. A dedicated "Friends" tab
+  handles requests and search; the "Feed" tab has a Public/Friends toggle -
+  Friends shows only your own posts plus posts from accepted friends.
 
 **Note on "Team" vs "club":** the person-facing label is "Team" everywhere in
 the UI, but the underlying `type` value stored in the database is still
@@ -172,12 +178,15 @@ one-off `psql` session) and starting fresh with real accounts only.
 ## What to build next
 
 Roughly in order of value:
-1. A real payment gateway (Stripe, PayFast) wired to the existing `plan`/
+1. **Stories** (24-hour expiring photo/video updates, viewable by friends) -
+   scoped out of this round deliberately; next up if you want it
+2. A real payment gateway (Stripe, PayFast) wired to the existing `plan`/
    `trial_started_at` columns, replacing the demo "subscribe" button
-2. Letting one account hold more than one profile (e.g. player + supporter)
-3. Password reset / "forgot password" flow (currently there isn't one)
-4. A directory/search page to browse teams and players generally
-5. Match schedules (not just posted lineups/live matches after the fact)
-6. Comments/reactions on posts
-7. Real object storage for images instead of base64-in-database
-8. Push notifications (new join request, new message, match went live)
+3. Letting one account hold more than one profile (e.g. player + supporter)
+4. Password reset / "forgot password" flow (currently there isn't one)
+5. A directory/search page to browse teams and players generally
+6. Match schedules (not just posted lineups/live matches after the fact)
+7. Comments/reactions on posts
+8. Real object storage for images instead of base64-in-database
+9. Push notifications (new join request, new message, new friend request,
+   match went live)

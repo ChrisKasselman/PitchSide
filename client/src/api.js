@@ -55,8 +55,15 @@ export const api = {
   submitLiveScore: (matchId, score) => req(`/live-matches/${matchId}/score`, { method: "POST", body: JSON.stringify({ score }) }),
   endLiveMatch: (matchId) => req(`/live-matches/${matchId}/end`, { method: "POST" }),
 
+  // friends (general connection between any profile types)
+  sendFriendRequest: (toId) => req("/friend-requests", { method: "POST", body: JSON.stringify({ toId }) }),
+  respondFriendRequest: (fromId, accept) => req("/friend-requests/respond", { method: "POST", body: JSON.stringify({ fromId, accept }) }),
+  removeFriend: (friendId) => req("/friends/remove", { method: "POST", body: JSON.stringify({ friendId }) }),
+  listMyFriends: () => req("/friends/mine"),
+
   // posts
   listPosts: () => req("/posts"),
+  listFriendsPosts: () => req("/posts/friends"),
   createPost: (post) => req("/posts", { method: "POST", body: JSON.stringify(post) }),
 
   // admin

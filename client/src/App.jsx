@@ -1253,6 +1253,129 @@ function PostCard({ post }) {
   );
 }
 
+// ---------- Friends ----------
+function FriendsView({ myProfile, allProfiles, refreshFeeds }) {
+  const [friends, setFriends] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => { try { setFriends(await api.listMyFriends()); } catch (e) { setError(e.message); } }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const statusFor = (id) => friends.find((f) => f.otherId === id) || null;
+
+  const send = async (id) => {
+    setBusy(true); setError(null);
+    try { await api.sendFriendRequest(id); await load(); }
+    catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+  const respond = async (id, accept) => {
+    setBusy(true); setError(null);
+    try { await api.respondFriendRequest(id, accept); await load(); if (accept) await refreshFeeds(); }
+    catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+  const remove = async (id) => {
+    setBusy(true); setError(null);
+    try { await api.removeFriend(id); await load(); await refreshFeeds(); }
+    catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+
+  const incoming = friends.filter((f) => f.direction === "incoming" && f.status === "pending");
+  const outgoing = friends.filter((f) => f.direction === "outgoing" && f.status === "pending");
+  const accepted = friends.filter((f) => f.status === "accepted");
+
+  const profileById = (id) => allProfiles.find((p) => p.id === id);
+  const others = allProfiles.filter((p) => p.id !== myProfile.id && p.type !== "admin");
+  const results = query.trim() ? others.filter((p) => p.name.toLowerCase().includes(query.toLowerCase())) : [];
+
+  return (
+    <div>
+      {error && <div style={{ color: "var(--score)", fontSize: 13, marginBottom: 14 }}>{error}</div>}
+
+      {incoming.length > 0 && (
+        <TeamSheetCard style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 10 }}>Friend requests</div>
+          {incoming.map((f) => {
+            const p = profileById(f.otherId);
+            if (!p) return null;
+            const meta = TYPE_META[p.type] || TYPE_META.supporter;
+            return (
+              <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <Avatar url={p.avatarUrl} size={32} fallbackIcon={meta.icon} fallbackColor={meta.color} />
+                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{meta.label}</div></div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Btn onClick={() => respond(f.otherId, true)} disabled={busy}><Check size={14} /></Btn>
+                  <Btn variant="danger" onClick={() => respond(f.otherId, false)} disabled={busy}><X size={14} /></Btn>
+                </div>
+              </div>
+            );
+          })}
+        </TeamSheetCard>
+      )}
+
+      <TeamSheetCard style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 10 }}>Your friends ({accepted.length})</div>
+        {accepted.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No friends yet - search below to send a request.</div>}
+        {accepted.map((f) => {
+          const p = profileById(f.otherId);
+          if (!p) return null;
+          const meta = TYPE_META[p.type] || TYPE_META.supporter;
+          return (
+            <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <Avatar url={p.avatarUrl} size={32} fallbackIcon={meta.icon} fallbackColor={meta.color} />
+                <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{meta.label}</div></div>
+              </div>
+              <Btn variant="ghost" onClick={() => remove(f.otherId)} disabled={busy}>Remove</Btn>
+            </div>
+          );
+        })}
+        {outgoing.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Requests sent</div>
+            {outgoing.map((f) => {
+              const p = profileById(f.otherId);
+              if (!p) return null;
+              return <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: "1px solid var(--turf-500)", fontSize: 13 }}><span>{p.name}</span><Pill>Pending</Pill></div>;
+            })}
+          </div>
+        )}
+      </TeamSheetCard>
+
+      <TeamSheetCard>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 10 }}>Find people</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, background: "var(--turf-900)", border: "1px solid var(--turf-500)", borderRadius: 6, padding: "6px 10px" }}>
+          <Search size={14} color="var(--line-grey)" />
+          <input style={{ ...inputStyle, border: "none", padding: 0, background: "transparent" }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name" />
+        </div>
+        {query.trim() && results.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No one found.</div>}
+        {results.map((p) => {
+          const meta = TYPE_META[p.type] || TYPE_META.supporter;
+          const rel = statusFor(p.id);
+          return (
+            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <Avatar url={p.avatarUrl} size={28} fallbackIcon={meta.icon} fallbackColor={meta.color} />
+                <div style={{ fontSize: 14 }}>{p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {meta.label}</span></div>
+              </div>
+              {rel?.status === "accepted" ? <Pill tone="amber">Friends</Pill>
+                : rel?.status === "pending" && rel.direction === "outgoing" ? <Pill>Requested</Pill>
+                : rel?.status === "pending" && rel.direction === "incoming" ? <Btn onClick={() => respond(p.id, true)} disabled={busy}>Accept</Btn>
+                : <Btn onClick={() => send(p.id)} disabled={busy}>Add friend</Btn>}
+            </div>
+          );
+        })}
+      </TeamSheetCard>
+    </div>
+  );
+}
+
 // ---------- Admin view ----------
 function StatBlock({ label, value, tone }) {
   return (
@@ -1357,6 +1480,7 @@ export default function App() {
   const [posts, setPosts] = useState([]);
   const [liveMatches, setLiveMatches] = useState([]);
   const [nav, setNav] = useState("profile");
+  const [feedScope, setFeedScope] = useState("public");
   const [liveBusy, setLiveBusy] = useState(false);
 
   const bootstrap = useCallback(async () => {
@@ -1387,7 +1511,10 @@ export default function App() {
     if (me.profile) setActiveProfile(me.profile);
   }, []);
 
-  const refreshPosts = useCallback(async () => { setPosts(await api.listPosts()); }, []);
+  const refreshPosts = useCallback(async (scope) => {
+    const s = scope || feedScope;
+    setPosts(s === "friends" ? await api.listFriendsPosts() : await api.listPosts());
+  }, [feedScope]);
   const refreshLive = useCallback(async () => { setLiveMatches(await api.listLiveMatches("live")); }, []);
 
   const handleProfileCreated = (profile) => { setActiveProfile(profile); bootstrap(); };
@@ -1418,8 +1545,8 @@ export default function App() {
           <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, letterSpacing: 0.5, color: "var(--floodlight)" }}>PITCHSIDE</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6 }}>
-              {["profile", "feed"].map((n) => (
-                <button key={n} onClick={() => setNav(n)} style={{ background: nav === n ? "var(--turf-500)" : "transparent", border: "1px solid var(--turf-500)", color: "var(--chalk)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{n === "profile" ? "My profile" : "Feed"}</button>
+              {["profile", "feed", "friends"].map((n) => (
+                <button key={n} onClick={() => setNav(n)} style={{ background: nav === n ? "var(--turf-500)" : "transparent", border: "1px solid var(--turf-500)", color: "var(--chalk)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{n === "profile" ? "My profile" : n === "feed" ? "Feed" : "Friends"}</button>
               ))}
             </div>
             <button onClick={logout} title="Log out" style={{ background: "transparent", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 10px", color: "var(--chalk)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 13 }}>
@@ -1444,11 +1571,17 @@ export default function App() {
         )}
         {nav === "feed" && (
           <div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              {["public", "friends"].map((s) => (
+                <button key={s} onClick={() => { setFeedScope(s); refreshPosts(s); }} style={{ background: feedScope === s ? "var(--floodlight)" : "transparent", color: feedScope === s ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{s === "public" ? "Public" : "Friends"}</button>
+              ))}
+            </div>
             {liveMatches.map((m) => <LiveMatchCard key={m.id} match={m} viewerType={activeProfile.type === "supporter" ? "supporter" : "viewer"} onSubmitScore={submitLiveScore} busy={liveBusy} />)}
-            {posts.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13, textAlign: "center", padding: 20 }}>Nothing on the feed yet. Post a lineup, achievement, or matchday update to get started.</div>}
+            {posts.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13, textAlign: "center", padding: 20 }}>{feedScope === "friends" ? "Nothing here yet - add some friends or wait for them to post." : "Nothing on the feed yet. Post a lineup, achievement, or matchday update to get started."}</div>}
             {posts.map((p) => <PostCard key={p.id} post={p} />)}
           </div>
         )}
+        {nav === "friends" && <FriendsView myProfile={activeProfile} allProfiles={allProfiles} refreshFeeds={() => refreshPosts()} />}
       </Shell>
     </div>
   );

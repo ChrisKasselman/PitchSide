@@ -101,6 +101,23 @@ async function initSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS live_matches_status_idx ON live_matches (status, created_at DESC);`);
+
+  // General-purpose connections between any two profiles (unlike roster/access_grants,
+  // which are specific to one relationship type). A friendship row IS the connection -
+  // status='accepted' means they're friends; 'pending' is an outstanding invite.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS friendships (
+      id TEXT PRIMARY KEY,
+      requester_id TEXT NOT NULL,
+      addressee_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (requester_id, addressee_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS friendships_addressee_idx ON friendships (addressee_id, status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS friendships_requester_idx ON friendships (requester_id, status);`);
 }
 
 module.exports = { pool, initSchema };
