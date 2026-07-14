@@ -14,17 +14,36 @@ const pool = new Pool({
 });
 
 async function initSchema() {
+  // Real accounts: email + hashed password. This is the actual identity
+  // system. Everything else (profiles, ownership) hangs off a user's id now.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS profiles (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
       name TEXT NOT NULL,
-      owner_token TEXT NOT NULL,
+      owner_token TEXT,
       payload JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // owner_token was the old browser-based pseudo-auth. It's no longer used by
+  // new code (real accounts replace it) but the column stays, nullable, so
+  // any profiles created before this change don't break.
+  await pool.query(`ALTER TABLE profiles ALTER COLUMN owner_token DROP NOT NULL;`);
+  // One user account = one profile. NULL user_id means the profile predates
+  // real accounts (created during testing) and is no longer editable by
+  // anyone until claimed - see README.
+  await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) UNIQUE;`);
   // Trial/plan tracking lives in real columns (not the payload) so the client
   // can never edit its own trial state.
   await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS trial_started_at TIMESTAMPTZ NOT NULL DEFAULT now();`);

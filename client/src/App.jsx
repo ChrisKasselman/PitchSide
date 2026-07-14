@@ -2,15 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Shield, User, Users, Trophy, Camera, Check, X, Plus, ChevronLeft, Newspaper,
   LogOut, Loader2, ImagePlus, Search, MessageCircle, Radio, Briefcase, ClipboardList,
-  LayoutDashboard,
+  LayoutDashboard, Mail, Lock, ImageOff,
 } from "lucide-react";
-import {
-  api, genToken, getMyProfiles, addMyProfile, getOwnerToken,
-  getActiveProfileId, setActiveProfileId,
-} from "./api.js";
+import { api, getToken, setToken, clearToken } from "./api.js";
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-const now = () => new Date().toISOString();
 const fmtDate = (iso) => {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " \u00b7 " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -35,6 +31,7 @@ async function resizeImage(file, maxW = 640, quality = 0.7) {
     reader.readAsDataURL(file);
   });
 }
+async function resizeAvatar(file) { return resizeImage(file, 320, 0.8); }
 
 const TYPE_META = {
   player: { label: "Player", icon: User, color: "var(--floodlight)" },
@@ -45,11 +42,6 @@ const TYPE_META = {
   admin: { label: "Admin", icon: LayoutDashboard, color: "#CFCFCF" },
 };
 
-// Pitchside supports multiple sports. Player stats are stored under fixed
-// keys (gamesPlayed/tries/conversions/playerOfMatch) to avoid a data
-// migration on profiles that already exist, but the LABELS shown for those
-// keys change based on the player's chosen sport. "Other" is the fallback
-// for anyone who hasn't set a sport yet, or plays something not listed.
 const SPORTS = ["Rugby", "Football", "Cricket", "Netball", "Hockey"];
 const SPORT_STATS = {
   Rugby: [["gamesPlayed", "Games"], ["tries", "Tries"], ["conversions", "Conversions"], ["playerOfMatch", "POTM"]],
@@ -74,6 +66,14 @@ function JerseyBadge({ number, size = 40 }) {
   return (
     <div style={{ width: size, height: size, borderRadius: 8, background: "var(--turf-900)", border: "1px solid var(--floodlight)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)", fontWeight: 700, color: "var(--floodlight)", fontSize: size * 0.42, flexShrink: 0 }}>
       {number ?? "-"}
+    </div>
+  );
+}
+function Avatar({ url, size = 52, fallbackIcon: Icon, fallbackColor }) {
+  if (url) return <img src={url} alt="" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: "1px solid var(--turf-500)" }} />;
+  return (
+    <div style={{ width: size, height: size, borderRadius: "50%", background: "var(--turf-900)", border: `1px solid ${fallbackColor || "var(--turf-500)"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <Icon size={size * 0.45} color={fallbackColor || "var(--line-grey)"} />
     </div>
   );
 }
@@ -116,19 +116,132 @@ function TrialBanner({ profile, onUpgrade, busy }) {
   return (
     <div style={{ background: expired ? "rgba(225,72,63,0.15)" : "rgba(255,201,77,0.12)", border: `1px solid ${expired ? "var(--score)" : "var(--floodlight)"}`, borderRadius: 8, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
       <div style={{ fontSize: 13 }}>
-        {expired
-          ? `Your free trial has ended. Subscribe for R${profile.monthlyPrice}/month to keep posting, requesting, and publishing.`
-          : `Free trial: ${profile.trialDaysLeft} day${profile.trialDaysLeft === 1 ? "" : "s"} left \u00b7 R${profile.monthlyPrice}/month after.`}
+        {expired ? `Your free trial has ended. Subscribe for R${profile.monthlyPrice}/month to keep posting, requesting, and publishing.` : `Free trial: ${profile.trialDaysLeft} day${profile.trialDaysLeft === 1 ? "" : "s"} left \u00b7 R${profile.monthlyPrice}/month after.`}
       </div>
-      <Btn onClick={onUpgrade} disabled={busy} variant={expired ? "primary" : "ghost"}>
-        {busy ? <Loader2 size={13} className="spin" /> : expired ? "Subscribe (demo)" : "Upgrade early (demo)"}
-      </Btn>
+      <Btn onClick={onUpgrade} disabled={busy} variant={expired ? "primary" : "ghost"}>{busy ? <Loader2 size={13} className="spin" /> : expired ? "Subscribe (demo)" : "Upgrade early (demo)"}</Btn>
     </div>
   );
 }
 
-// ---------- Onboarding ----------
-function Onboarding({ onCreated, errorBanner }) {
+// Small reusable avatar-upload control used inside every profile edit form.
+function AvatarEditor({ url, onChange, fallbackIcon, fallbackColor }) {
+  const fileRef = useRef(null);
+  const handleFile = async (e) => { const f = e.target.files[0]; if (!f) return; onChange(await resizeAvatar(f)); };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+      <Avatar url={url} size={56} fallbackIcon={fallbackIcon} fallbackColor={fallbackColor} />
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+      <Btn variant="ghost" onClick={() => fileRef.current.click()}><Camera size={13} /> {url ? "Change photo" : "Add profile photo"}</Btn>
+      {url && <Btn variant="ghost" onClick={() => onChange(null)}><ImageOff size={13} /></Btn>}
+    </div>
+  );
+}
+
+// Reusable photo-gallery editor (career photos, team photos, etc.)
+function GalleryEditor({ photos, onChange }) {
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const addPhoto = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setBusy(true);
+    const dataUrl = await resizeImage(f, 800, 0.7);
+    onChange([...photos, dataUrl]);
+    setBusy(false);
+  };
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: "var(--line-grey)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Photo gallery</div>
+      {photos.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))", gap: 8, marginBottom: 10 }}>
+          {photos.map((p, i) => (
+            <div key={i} style={{ position: "relative" }}>
+              <img src={p} alt="" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 6, display: "block" }} />
+              <button onClick={() => onChange(photos.filter((_, idx) => idx !== i))} style={{ position: "absolute", top: 3, right: 3, background: "rgba(12,46,34,0.85)", border: "none", borderRadius: "50%", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                <X size={11} color="var(--chalk)" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input ref={fileRef} type="file" accept="image/*" onChange={addPhoto} style={{ display: "none" }} />
+      <Btn variant="ghost" onClick={() => fileRef.current.click()} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : <ImagePlus size={13} />} Add photo</Btn>
+    </div>
+  );
+}
+function GalleryDisplay({ photos }) {
+  if (!photos?.length) return null;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))", gap: 8, marginTop: 12 }}>
+      {photos.map((p, i) => <img key={i} src={p} alt="" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 6 }} />)}
+    </div>
+  );
+}
+
+// ---------- Login / Register ----------
+function AuthScreen({ onAuthed, errorBanner }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    setError(null);
+    if (mode === "register" && password !== confirm) { setError("Passwords don't match."); return; }
+    setBusy(true);
+    try {
+      const result = mode === "login" ? await api.login(email, password) : await api.register(email, password);
+      setToken(result.token);
+      onAuthed();
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ maxWidth: 400, margin: "60px auto", padding: "0 16px" }}>
+      <div style={{ textAlign: "center", marginBottom: 28 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, letterSpacing: 1, color: "var(--floodlight)" }}>PITCHSIDE</div>
+        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>Every player, team, supporter, coach and scout on one team sheet.</div>
+      </div>
+      {errorBanner && <div style={{ background: "rgba(225,72,63,0.15)", color: "var(--score)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>{errorBanner}</div>}
+      <TeamSheetCard>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button onClick={() => { setMode("login"); setError(null); }} style={{ flex: 1, padding: "8px 0", background: mode === "login" ? "var(--floodlight)" : "transparent", color: mode === "login" ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 6, fontWeight: 600, fontFamily: "var(--font-display)", cursor: "pointer" }}>Log in</button>
+          <button onClick={() => { setMode("register"); setError(null); }} style={{ flex: 1, padding: "8px 0", background: mode === "register" ? "var(--floodlight)" : "transparent", color: mode === "register" ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 6, fontWeight: 600, fontFamily: "var(--font-display)", cursor: "pointer" }}>Create account</button>
+        </div>
+        <Field label="Email">
+          <div style={{ position: "relative" }}>
+            <Mail size={14} color="var(--line-grey)" style={{ position: "absolute", left: 11, top: 11 }} />
+            <input style={{ ...inputStyle, paddingLeft: 32 }} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" onKeyDown={(e) => e.key === "Enter" && submit()} />
+          </div>
+        </Field>
+        <Field label="Password">
+          <div style={{ position: "relative" }}>
+            <Lock size={14} color="var(--line-grey)" style={{ position: "absolute", left: 11, top: 11 }} />
+            <input style={{ ...inputStyle, paddingLeft: 32 }} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === "register" ? "At least 8 characters" : "••••••••"} onKeyDown={(e) => e.key === "Enter" && submit()} />
+          </div>
+        </Field>
+        {mode === "register" && (
+          <Field label="Confirm password">
+            <div style={{ position: "relative" }}>
+              <Lock size={14} color="var(--line-grey)" style={{ position: "absolute", left: 11, top: 11 }} />
+              <input style={{ ...inputStyle, paddingLeft: 32 }} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Retype your password" onKeyDown={(e) => e.key === "Enter" && submit()} />
+            </div>
+          </Field>
+        )}
+        {error && <div style={{ color: "var(--score)", fontSize: 13, marginBottom: 10 }}>{error}</div>}
+        <Btn onClick={submit} disabled={busy || !email || !password} style={{ width: "100%", justifyContent: "center" }}>
+          {busy ? <Loader2 size={15} className="spin" /> : <Check size={15} />} {mode === "login" ? "Log in" : "Create account"}
+        </Btn>
+      </TeamSheetCard>
+    </div>
+  );
+}
+
+// ---------- Profile setup (shown right after first login, once) ----------
+function ProfileSetup({ onCreated }) {
   const [step, setStep] = useState(0);
   const [type, setType] = useState(null);
   const [form, setForm] = useState({ name: "", position: "", jerseyNumber: "", location: "", level: "club", sport: "" });
@@ -141,28 +254,21 @@ function Onboarding({ onCreated, errorBanner }) {
     setBusy(true);
     setError(null);
     const profile = {
-      id: uid(), type, name: form.name.trim(), createdAt: now(),
+      type, name: form.name.trim(),
       ...(type === "player" ? {
         position: form.position, jerseyNumber: form.jerseyNumber, bio: "", weight: "", height: "", age: "", hobbies: "",
         positions: form.position, career: [], sport: form.sport || "", stats: { gamesPlayed: 0, tries: 0, conversions: 0, playerOfMatch: 0 },
         achievements: [], clubId: null, pendingClubId: null, openToOffers: false, currentContract: "", askingSalary: "",
-        region: "", attributes: [],
-        contactInfo: "", linkedAgents: [],
+        region: "", attributes: [], avatarUrl: null, gallery: [],
       } : {}),
-      ...(type === "club" ? { location: form.location, level: form.level, sport: form.sport || "", roster: [], pending: [], founded: "", trophies: [], currentLog: "", coachRoster: [], coachPending: [] } : {}),
-      ...(type === "supporter" ? { bio: "", career: "", supportedClubIds: [] } : {}),
-      ...(type === "scout" ? { bio: "", achievements: "" } : {}),
-      ...(type === "coach" ? {
-        bio: "", qualifications: "", yearsExperience: "", specialization: "",
-        achievements: [], teamId: null, pendingTeamId: null,
-      } : {}),
+      ...(type === "club" ? { location: form.location, level: form.level, sport: form.sport || "", roster: [], pending: [], founded: "", trophies: [], currentLog: "", coachRoster: [], coachPending: [], avatarUrl: null, gallery: [] } : {}),
+      ...(type === "supporter" ? { bio: "", career: "", supportedClubIds: [], avatarUrl: null } : {}),
+      ...(type === "scout" ? { bio: "", achievements: "", avatarUrl: null } : {}),
+      ...(type === "coach" ? { bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], teamId: null, pendingTeamId: null, avatarUrl: null } : {}),
     };
-    const ownerToken = genToken();
     try {
-      await api.createProfile(profile, ownerToken);
-      addMyProfile({ id: profile.id, name: profile.name, type: profile.type, ownerToken });
-      setActiveProfileId(profile.id);
-      onCreated(profile.id);
+      const created = await api.createProfile(profile);
+      onCreated(created);
     } catch (e) { setError(e.message); }
     setBusy(false);
   };
@@ -170,11 +276,9 @@ function Onboarding({ onCreated, errorBanner }) {
   return (
     <div style={{ maxWidth: 440, margin: "40px auto", padding: "0 16px" }}>
       <div style={{ textAlign: "center", marginBottom: 28 }}>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, letterSpacing: 1, color: "var(--floodlight)" }}>PITCHSIDE</div>
-        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>Every player, team, supporter, coach and scout on one team sheet.</div>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--chalk)" }}>Set up your profile</div>
+        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>One more step before you're on Pitchside.</div>
       </div>
-
-      {errorBanner && <div style={{ background: "rgba(225,72,63,0.15)", color: "var(--score)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>{errorBanner}</div>}
 
       {step === 0 && (
         <TeamSheetCard>
@@ -202,9 +306,7 @@ function Onboarding({ onCreated, errorBanner }) {
 
       {step === 1 && (
         <TeamSheetCard>
-          <button onClick={() => setStep(0)} style={{ background: "none", border: "none", color: "var(--line-grey)", display: "flex", alignItems: "center", gap: 4, marginBottom: 12, cursor: "pointer", padding: 0, fontSize: 13 }}>
-            <ChevronLeft size={14} /> Back
-          </button>
+          <button onClick={() => setStep(0)} style={{ background: "none", border: "none", color: "var(--line-grey)", display: "flex", alignItems: "center", gap: 4, marginBottom: 12, cursor: "pointer", padding: 0, fontSize: 13 }}><ChevronLeft size={14} /> Back</button>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>
             {type === "player" && "Set up your player profile"}
             {type === "club" && "Set up your team"}
@@ -250,9 +352,7 @@ function Onboarding({ onCreated, errorBanner }) {
             </>
           )}
           {error && <div style={{ color: "var(--score)", fontSize: 13, marginBottom: 10 }}>{error}</div>}
-          <Btn onClick={create} disabled={!form.name.trim() || busy} style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>
-            {busy ? <Loader2 size={15} className="spin" /> : <Check size={15} />} Create profile
-          </Btn>
+          <Btn onClick={create} disabled={!form.name.trim() || busy} style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>{busy ? <Loader2 size={15} className="spin" /> : <Check size={15} />} Create profile</Btn>
           <div style={{ fontSize: 11, color: "var(--line-grey)", marginTop: 10, textAlign: "center" }}>30-day free trial, then R{priceFor[type]}/month.</div>
         </TeamSheetCard>
       )}
@@ -261,22 +361,19 @@ function Onboarding({ onCreated, errorBanner }) {
 }
 
 // ---------- Chat ----------
-function ChatPanel({ meId, meOwnerToken, otherId, otherName, onClose }) {
+function ChatPanel({ meId, otherId, otherName, onClose }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
-  const load = useCallback(async () => {
-    try { setMessages(await api.listMessages(meId, otherId)); } catch (e) { setError(e.message); }
-  }, [meId, otherId]);
-
+  const load = useCallback(async () => { try { setMessages(await api.listMessages(otherId)); } catch (e) { setError(e.message); } }, [otherId]);
   useEffect(() => { load(); const t = setInterval(load, 4000); return () => clearInterval(t); }, [load]);
 
   const send = async () => {
     if (!text.trim()) return;
     setBusy(true);
-    try { await api.sendMessage(meId, meOwnerToken, otherId, text.trim()); setText(""); await load(); }
+    try { await api.sendMessage(otherId, text.trim()); setText(""); await load(); }
     catch (e) { setError(e.message); }
     setBusy(false);
   };
@@ -291,9 +388,7 @@ function ChatPanel({ meId, meOwnerToken, otherId, otherName, onClose }) {
       <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
         {messages.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13 }}>No messages yet - say hello.</div>}
         {messages.map((m) => (
-          <div key={m.id} style={{ alignSelf: m.fromId === meId ? "flex-end" : "flex-start", background: m.fromId === meId ? "var(--floodlight)" : "var(--turf-900)", color: m.fromId === meId ? "var(--turf-900)" : "var(--chalk)", borderRadius: 10, padding: "6px 10px", fontSize: 13, maxWidth: "80%" }}>
-            {m.body}
-          </div>
+          <div key={m.id} style={{ alignSelf: m.fromId === meId ? "flex-end" : "flex-start", background: m.fromId === meId ? "var(--floodlight)" : "var(--turf-900)", color: m.fromId === meId ? "var(--turf-900)" : "var(--chalk)", borderRadius: 10, padding: "6px 10px", fontSize: 13, maxWidth: "80%" }}>{m.body}</div>
         ))}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
@@ -311,8 +406,7 @@ function LiveMatchCard({ match, viewerType, onSubmitScore, onEnd, busy }) {
   return (
     <TeamSheetCard style={{ marginBottom: 14, borderColor: "var(--score)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <Radio size={14} color="var(--score)" />
-        <Pill tone="red">Live</Pill>
+        <Radio size={14} color="var(--score)" /><Pill tone="red">Live</Pill>
         <div style={{ fontWeight: 600, fontSize: 14 }}>{match.clubName} vs {match.opponent || "opponents"}</div>
       </div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 32, color: "var(--floodlight)", fontWeight: 700 }}>{match.liveScore || "-- : --"}</div>
@@ -326,9 +420,7 @@ function LiveMatchCard({ match, viewerType, onSubmitScore, onEnd, busy }) {
           <Btn onClick={() => { if (score.trim()) { onSubmitScore(match.id, score.trim()); setScore(""); } }} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : "Submit"}</Btn>
         </div>
       )}
-      {viewerType === "club-owner" && (
-        <Btn variant="danger" onClick={() => onEnd(match.id)} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : "End match"}</Btn>
-      )}
+      {viewerType === "club-owner" && <Btn variant="danger" onClick={() => onEnd(match.id)} disabled={busy}>{busy ? <Loader2 size={13} className="spin" /> : "End match"}</Btn>}
     </TeamSheetCard>
   );
 }
@@ -339,44 +431,38 @@ function PlayerView({ profile, refresh, clubs }) {
   const [draft, setDraft] = useState(profile);
   const [achInput, setAchInput] = useState("");
   const [careerDraft, setCareerDraft] = useState({ club: "", from: "", to: "" });
+  const [attrInput, setAttrInput] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [grants, setGrants] = useState([]);
   const [chatWith, setChatWith] = useState(null);
 
-  const [attrInput, setAttrInput] = useState("");
-
-  useEffect(() => setDraft({ region: "", attributes: [], sport: "", ...profile }), [profile.id]);
-  const loadGrants = useCallback(async () => { try { setGrants(await api.listAccessRequestsFor(profile.id)); } catch {} }, [profile.id]);
+  useEffect(() => setDraft({ region: "", attributes: [], sport: "", avatarUrl: null, gallery: [], ...profile }), [profile.id]);
+  const loadGrants = useCallback(async () => { try { setGrants(await api.listMyAccessRequests()); } catch {} }, []);
   useEffect(() => { loadGrants(); }, [loadGrants]);
 
   const save = async () => {
     setBusy(true);
-    try { await api.updateProfile(profile.id, draft, getOwnerToken(profile.id)); setEditing(false); await refresh(); }
+    try { await api.updateMyProfile(draft); setEditing(false); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
   const requestJoin = async (clubId) => {
     setBusy(true);
-    try { await api.sendJoinRequest(profile.id, getOwnerToken(profile.id), clubId); setShowJoin(false); await refresh(); }
+    try { await api.sendJoinRequest(clubId); setShowJoin(false); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
   const respondScout = async (scoutId, accept) => {
     setBusy(true);
-    try { await api.respondAccessRequest(profile.id, getOwnerToken(profile.id), scoutId, accept); await loadGrants(); await refresh(); }
+    try { await api.respondAccessRequest(scoutId, accept); await loadGrants(); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
-  const upgrade = async () => {
-    setBusy(true);
-    try { await api.upgradeProfile(profile.id, getOwnerToken(profile.id)); await refresh(); }
-    catch (e) { alert(e.message); }
-    setBusy(false);
-  };
+  const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
 
   const myClub = profile.clubId ? clubs.find((c) => c.id === profile.clubId) : null;
   const pendingClub = profile.pendingClubId ? clubs.find((c) => c.id === profile.pendingClubId) : null;
@@ -388,10 +474,10 @@ function PlayerView({ profile, refresh, clubs }) {
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-          <JerseyBadge number={profile.jerseyNumber} size={52} />
+          <Avatar url={profile.avatarUrl} size={52} fallbackIcon={User} fallbackColor="var(--floodlight)" />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
-            <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.positions || profile.position || "Position not set"}</div>
+            <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.positions || profile.position || "Position not set"} {profile.jerseyNumber && `\u00b7 #${profile.jerseyNumber}`}</div>
             <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {myClub ? <Pill tone="amber">{myClub.name}</Pill> : pendingClub ? <Pill>Request sent \u00b7 {pendingClub.name}</Pill> : <Pill>Unattached</Pill>}
               {profile.sport && <Pill>{profile.sport}</Pill>}
@@ -403,12 +489,19 @@ function PlayerView({ profile, refresh, clubs }) {
 
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={User} fallbackColor="var(--floodlight)" />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <div style={{ display: "flex", gap: 10 }}>
               <Field label="Weight"><input style={inputStyle} value={draft.weight} onChange={(e) => setDraft({ ...draft, weight: e.target.value })} placeholder="82kg" /></Field>
               <Field label="Height"><input style={inputStyle} value={draft.height} onChange={(e) => setDraft({ ...draft, height: e.target.value })} placeholder="1.78m" /></Field>
               <Field label="Age"><input style={inputStyle} value={draft.age} onChange={(e) => setDraft({ ...draft, age: e.target.value })} placeholder="24" /></Field>
             </div>
+            <Field label="Sport">
+              <select style={inputStyle} value={draft.sport || ""} onChange={(e) => setDraft({ ...draft, sport: e.target.value })}>
+                <option value="">Select a sport</option>
+                {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
             <Field label="Position(s)"><input style={inputStyle} value={draft.positions} onChange={(e) => setDraft({ ...draft, positions: e.target.value })} placeholder="Fly-half, Centre" /></Field>
             <Field label="Hobbies"><input style={inputStyle} value={draft.hobbies} onChange={(e) => setDraft({ ...draft, hobbies: e.target.value })} placeholder="Fishing, gym" /></Field>
             <Field label="Region"><input style={inputStyle} value={draft.region} onChange={(e) => setDraft({ ...draft, region: e.target.value })} placeholder="Gauteng, South Africa" /></Field>
@@ -420,9 +513,7 @@ function PlayerView({ profile, refresh, clubs }) {
               </div>
               {draft.attributes.length > 0 && (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                  {draft.attributes.map((a, i) => (
-                    <Pill key={i} tone="blue">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, attributes: draft.attributes.filter((_, idx) => idx !== i) })} /></Pill>
-                  ))}
+                  {draft.attributes.map((a, i) => <Pill key={i} tone="blue">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, attributes: draft.attributes.filter((_, idx) => idx !== i) })} /></Pill>)}
                 </div>
               )}
             </Field>
@@ -444,12 +535,6 @@ function PlayerView({ profile, refresh, clubs }) {
               </div>
             </Field>
 
-            <Field label="Sport">
-              <select style={inputStyle} value={draft.sport || ""} onChange={(e) => setDraft({ ...draft, sport: e.target.value })}>
-                <option value="">Select a sport</option>
-                {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </Field>
             <div style={{ display: "flex", gap: 10 }}>
               <Field label={statLabelsFor(draft.sport)[0][1]}><input type="number" style={inputStyle} value={draft.stats.gamesPlayed} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, gamesPlayed: +e.target.value } })} /></Field>
               <Field label={statLabelsFor(draft.sport)[1][1]}><input type="number" style={inputStyle} value={draft.stats.tries} onChange={(e) => setDraft({ ...draft, stats: { ...draft.stats, tries: +e.target.value } })} /></Field>
@@ -466,11 +551,11 @@ function PlayerView({ profile, refresh, clubs }) {
             </Field>
             {draft.achievements.length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-                {draft.achievements.map((a, i) => (
-                  <Pill key={i} tone="amber">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, achievements: draft.achievements.filter((_, idx) => idx !== i) })} /></Pill>
-                ))}
+                {draft.achievements.map((a, i) => <Pill key={i} tone="amber">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, achievements: draft.achievements.filter((_, idx) => idx !== i) })} /></Pill>)}
               </div>
             )}
+
+            <GalleryEditor photos={draft.gallery || []} onChange={(gallery) => setDraft({ ...draft, gallery })} />
 
             <div style={{ borderTop: "1px solid var(--turf-500)", paddingTop: 14, marginTop: 4 }}>
               <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 10 }}>Contract & scouting (visible to accepted scouts/agents only)</div>
@@ -515,6 +600,7 @@ function PlayerView({ profile, refresh, clubs }) {
                 {profile.attributes.map((a, i) => <Pill key={i} tone="blue">{a}</Pill>)}
               </div>
             )}
+            <GalleryDisplay photos={profile.gallery} />
           </>
         )}
       </TeamSheetCard>
@@ -567,7 +653,7 @@ function PlayerView({ profile, refresh, clubs }) {
               <div style={{ fontSize: 13 }}>Linked agent <code>{g.scoutId}</code></div>
               <Btn variant="ghost" onClick={() => setChatWith(chatWith === g.scoutId ? null : g.scoutId)}><MessageCircle size={13} /> Message</Btn>
             </div>
-            {chatWith === g.scoutId && <ChatPanel meId={profile.id} meOwnerToken={getOwnerToken(profile.id)} otherId={g.scoutId} otherName="agent" onClose={() => setChatWith(null)} />}
+            {chatWith === g.scoutId && <ChatPanel meId={profile.id} otherId={g.scoutId} otherName="agent" onClose={() => setChatWith(null)} />}
           </div>
         ))}
       </TeamSheetCard>
@@ -575,7 +661,7 @@ function PlayerView({ profile, refresh, clubs }) {
   );
 }
 
-// ---------- Club view ----------
+// ---------- Club (Team) view ----------
 function ClubView({ profile, refresh, allProfiles, onPost }) {
   const [tab, setTab] = useState("roster");
   const [lineupName, setLineupName] = useState("");
@@ -584,7 +670,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
   const [newsText, setNewsText] = useState("");
   const [posting, setPosting] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [bioDraft, setBioDraft] = useState({ founded: profile.founded || "", currentLog: profile.currentLog || "", sport: profile.sport || "" });
+  const [bioDraft, setBioDraft] = useState({ founded: profile.founded || "", currentLog: profile.currentLog || "", sport: profile.sport || "", avatarUrl: profile.avatarUrl || null, gallery: profile.gallery || [] });
   const [trophyInput, setTrophyInput] = useState("");
   const [trophies, setTrophies] = useState(profile.trophies || []);
   const [savingBio, setSavingBio] = useState(false);
@@ -603,14 +689,13 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 
   const respond = async (playerId, accept) => {
     setBusy(true);
-    try { await api.respondToJoinRequest(profile.id, getOwnerToken(profile.id), playerId, accept); await refresh(); }
+    try { await api.respondToJoinRequest(playerId, accept); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
-
   const respondCoach = async (coachId, accept) => {
     setBusy(true);
-    try { await api.respondToCoachJoinRequest(profile.id, getOwnerToken(profile.id), coachId, accept); await refresh(); }
+    try { await api.respondToCoachJoinRequest(coachId, accept); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
@@ -621,7 +706,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
     setPosting(true);
     const lineup = selected.map((id) => { const p = rosterPlayers.find((r) => r.id === id); return { id, name: p.name, number: p.jerseyNumber, position: p.positions || p.position }; });
     try {
-      await onPost({ kind: "lineup", authorId: profile.id, authorName: profile.name, authorType: "club", title: lineupName || "Matchday lineup", body: opponent ? `vs ${opponent}` : "", meta: { lineup } });
+      await onPost({ kind: "lineup", title: lineupName || "Matchday lineup", body: opponent ? `vs ${opponent}` : "", meta: { lineup } });
       setLineupName(""); setOpponent(""); setSelected([]); setTab("roster");
     } catch (e) { alert(e.message); }
     setPosting(false);
@@ -630,43 +715,44 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
   const postNews = async () => {
     if (!newsText.trim()) return;
     setPosting(true);
-    try { await onPost({ kind: "news", authorId: profile.id, authorName: profile.name, authorType: "club", title: newsText.trim(), body: "" }); setNewsText(""); }
+    try { await onPost({ kind: "news", title: newsText.trim(), body: "" }); setNewsText(""); }
     catch (e) { alert(e.message); }
     setPosting(false);
   };
 
   const saveBio = async () => {
     setSavingBio(true);
-    try { await api.updateProfile(profile.id, { ...profile, ...bioDraft, trophies }, getOwnerToken(profile.id)); await refresh(); }
+    try { await api.updateMyProfile({ ...bioDraft, trophies }); await refresh(); }
     catch (e) { alert(e.message); }
     setSavingBio(false);
   };
 
   const startLiveMatch = async () => {
     setBusy(true);
-    try { await api.createLiveMatch(profile.id, getOwnerToken(profile.id), matchOpponent); setMatchOpponent(""); await loadLive(); }
+    try { await api.createLiveMatch(matchOpponent); setMatchOpponent(""); await loadLive(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
   const endLiveMatch = async (id) => {
     setBusy(true);
-    try { await api.endLiveMatch(id, getOwnerToken(profile.id)); await loadLive(); await refresh(); }
+    try { await api.endLiveMatch(id); await loadLive(); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
-  const upgrade = async () => { setBusy(true); try { await api.upgradeProfile(profile.id, getOwnerToken(profile.id)); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
+  const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
 
   return (
     <div>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-          <div style={{ width: 52, height: 52, borderRadius: 8, background: "var(--turf-900)", border: "1px solid var(--score)", display: "flex", alignItems: "center", justifyContent: "center" }}><Shield size={26} color="var(--score)" /></div>
+          <Avatar url={profile.avatarUrl} size={52} fallbackIcon={Shield} fallbackColor="var(--score)" />
           <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><div style={{ color: "var(--line-grey)", fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span>{profile.location} \u00b7 {profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>{profile.sport && <Pill>{profile.sport}</Pill>}</div></div>
         </div>
         {profile.trophies?.length > 0 && <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>{profile.trophies.map((t, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{t}</Pill>)}</div>}
         {profile.currentLog && <div style={{ marginTop: 10, fontSize: 13, color: "var(--chalk)", whiteSpace: "pre-wrap" }}>{profile.currentLog}</div>}
+        <GalleryDisplay photos={profile.gallery} />
         <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
           <div><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{profile.roster.length}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>Squad</div></div>
           {profile.pending.length > 0 && <div><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--score)" }}>{profile.pending.length}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>Pending</div></div>}
@@ -690,7 +776,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
               <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Join requests</div>
               {pendingPlayers.map((p) => (
                 <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
-                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}><JerseyBadge number={p.jerseyNumber} size={32} /><div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position}</div></div></div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}><Avatar url={p.avatarUrl} size={32} fallbackIcon={User} /><div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position}</div></div></div>
                   <div style={{ display: "flex", gap: 6 }}><Btn onClick={() => respond(p.id, true)} disabled={busy}><Check size={14} /></Btn><Btn variant="danger" onClick={() => respond(p.id, false)} disabled={busy}><X size={14} /></Btn></div>
                 </div>
               ))}
@@ -700,7 +786,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
           {rosterPlayers.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No players yet.</div>}
           {rosterPlayers.map((p) => (
             <div key={p.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
-              <JerseyBadge number={p.jerseyNumber} size={32} />
+              <Avatar url={p.avatarUrl} size={32} fallbackIcon={User} />
               <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position} \u00b7 {p.stats.tries} {statLabelsFor(p.sport)[1][1].toLowerCase()}, {p.stats.conversions} {statLabelsFor(p.sport)[2][1].toLowerCase()}</div></div>
             </div>
           ))}
@@ -721,7 +807,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
             {coachRoster.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No coaching staff yet.</div>}
             {coachRoster.map((c) => (
               <div key={c.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
-                <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--turf-900)", border: "1px solid #6FBFAE", display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={15} color="#6FBFAE" /></div>
+                <Avatar url={c.avatarUrl} size={32} fallbackIcon={ClipboardList} fallbackColor="#6FBFAE" />
                 <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.specialization || "Coach"}{c.yearsExperience && ` \u00b7 ${c.yearsExperience} yrs experience`}</div></div>
               </div>
             ))}
@@ -771,6 +857,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 
       {tab === "team info" && (
         <TeamSheetCard>
+          <AvatarEditor url={bioDraft.avatarUrl} onChange={(url) => setBioDraft({ ...bioDraft, avatarUrl: url })} fallbackIcon={Shield} fallbackColor="var(--score)" />
           <Field label="Sport">
             <select style={inputStyle} value={bioDraft.sport} onChange={(e) => setBioDraft({ ...bioDraft, sport: e.target.value })}>
               <option value="">Select a sport</option>
@@ -786,6 +873,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
             </div>
           </Field>
           {trophies.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>{trophies.map((t, i) => <Pill key={i} tone="amber">{t} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setTrophies(trophies.filter((_, idx) => idx !== i))} /></Pill>)}</div>}
+          <GalleryEditor photos={bioDraft.gallery || []} onChange={(gallery) => setBioDraft({ ...bioDraft, gallery })} />
           <Btn onClick={saveBio} disabled={savingBio}>{savingBio ? <Loader2 size={14} className="spin" /> : "Save team info"}</Btn>
         </TeamSheetCard>
       )}
@@ -796,28 +884,28 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 // ---------- Coach view ----------
 function CoachView({ profile, refresh, clubs }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], ...profile });
+  const [draft, setDraft] = useState({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], avatarUrl: null, ...profile });
   const [achInput, setAchInput] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => setDraft({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], ...profile }), [profile.id]);
+  useEffect(() => setDraft({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], avatarUrl: null, ...profile }), [profile.id]);
 
   const save = async () => {
     setBusy(true);
-    try { await api.updateProfile(profile.id, draft, getOwnerToken(profile.id)); setEditing(false); await refresh(); }
+    try { await api.updateMyProfile(draft); setEditing(false); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
   const requestJoin = async (teamId) => {
     setBusy(true);
-    try { await api.sendCoachJoinRequest(profile.id, getOwnerToken(profile.id), teamId); setShowJoin(false); await refresh(); }
+    try { await api.sendCoachJoinRequest(teamId); setShowJoin(false); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
-  const upgrade = async () => { setBusy(true); try { await api.upgradeProfile(profile.id, getOwnerToken(profile.id)); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
+  const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
 
   const myTeam = profile.teamId ? clubs.find((c) => c.id === profile.teamId) : null;
   const pendingTeam = profile.pendingTeamId ? clubs.find((c) => c.id === profile.pendingTeamId) : null;
@@ -827,7 +915,7 @@ function CoachView({ profile, refresh, clubs }) {
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-          <div style={{ width: 52, height: 52, borderRadius: 8, background: "var(--turf-900)", border: "1px solid #6FBFAE", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><ClipboardList size={24} color="#6FBFAE" /></div>
+          <Avatar url={profile.avatarUrl} size={52} fallbackIcon={ClipboardList} fallbackColor="#6FBFAE" />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
             <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.specialization || "Specialization not set"}</div>
@@ -840,6 +928,7 @@ function CoachView({ profile, refresh, clubs }) {
 
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={ClipboardList} fallbackColor="#6FBFAE" />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <Field label="Qualifications"><input style={inputStyle} value={draft.qualifications} onChange={(e) => setDraft({ ...draft, qualifications: e.target.value })} placeholder="UEFA A License, Level 3 Rugby Coaching" /></Field>
             <div style={{ display: "flex", gap: 10 }}>
@@ -854,9 +943,7 @@ function CoachView({ profile, refresh, clubs }) {
             </Field>
             {draft.achievements.length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-                {draft.achievements.map((a, i) => (
-                  <Pill key={i} tone="amber">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, achievements: draft.achievements.filter((_, idx) => idx !== i) })} /></Pill>
-                ))}
+                {draft.achievements.map((a, i) => <Pill key={i} tone="amber">{a} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setDraft({ ...draft, achievements: draft.achievements.filter((_, idx) => idx !== i) })} /></Pill>)}
               </div>
             )}
             <Btn onClick={save} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : "Save changes"}</Btn>
@@ -908,34 +995,39 @@ function CoachView({ profile, refresh, clubs }) {
 // ---------- Supporter view ----------
 function SupporterProfileCard({ profile, refresh, clubs }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ bio: profile.bio || "", career: profile.career || "", supportedClubIds: profile.supportedClubIds || [] });
+  const [draft, setDraft] = useState({ bio: profile.bio || "", career: profile.career || "", supportedClubIds: profile.supportedClubIds || [], avatarUrl: profile.avatarUrl || null });
   const [busy, setBusy] = useState(false);
 
   const toggleClub = (id) => setDraft((d) => ({ ...d, supportedClubIds: d.supportedClubIds.includes(id) ? d.supportedClubIds.filter((x) => x !== id) : [...d.supportedClubIds, id] }));
 
   const save = async () => {
     setBusy(true);
-    try { await api.updateProfile(profile.id, { ...profile, ...draft }, getOwnerToken(profile.id)); setEditing(false); await refresh(); }
+    try { await api.updateMyProfile(draft); setEditing(false); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
-  const upgrade = async () => { setBusy(true); try { await api.upgradeProfile(profile.id, getOwnerToken(profile.id)); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
+  const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
 
   return (
     <>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
-            <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {(profile.supportedClubIds || []).map((id) => { const c = clubs.find((x) => x.id === id); return c ? <Pill key={id} tone="amber">{c.name}</Pill> : null; })}
-              {(!profile.supportedClubIds || profile.supportedClubIds.length === 0) && <Pill>Not following a club yet</Pill>}
+          <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+            <Avatar url={profile.avatarUrl} size={52} fallbackIcon={Users} />
+            <div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
+              <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(profile.supportedClubIds || []).map((id) => { const c = clubs.find((x) => x.id === id); return c ? <Pill key={id} tone="amber">{c.name}</Pill> : null; })}
+                {(!profile.supportedClubIds || profile.supportedClubIds.length === 0) && <Pill>Not following a team yet</Pill>}
+              </div>
             </div>
           </div>
           <Btn variant="ghost" onClick={() => setEditing((v) => !v)}>{editing ? "Cancel" : "Edit"}</Btn>
         </div>
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={Users} />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <Field label="Your supporter story"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.career} onChange={(e) => setDraft({ ...draft, career: e.target.value })} placeholder="Been following Riverside since 2015..." /></Field>
             <Field label="Teams you support">
@@ -973,7 +1065,7 @@ function SupporterUpload({ profile, onPost }) {
     if (!title.trim()) return;
     setBusy(true);
     try {
-      await onPost({ kind: "matchday", authorId: profile.id, authorName: profile.name, authorType: "supporter", title: title.trim(), body, meta: { score: score || null }, imageDataUrl: image });
+      await onPost({ kind: "matchday", title: title.trim(), body, meta: { score: score || null }, imageDataUrl: image });
       setTitle(""); setBody(""); setScore(""); setImage(null);
     } catch (e) { alert(e.message); }
     setBusy(false);
@@ -998,7 +1090,7 @@ function SupporterUpload({ profile, onPost }) {
 // ---------- Scout view ----------
 function ScoutView({ profile, refresh, allProfiles }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ bio: profile.bio || "", achievements: profile.achievements || "" });
+  const [draft, setDraft] = useState({ bio: profile.bio || "", achievements: profile.achievements || "", avatarUrl: profile.avatarUrl || null });
   const [busy, setBusy] = useState(false);
   const [grants, setGrants] = useState([]);
   const [query, setQuery] = useState("");
@@ -1018,25 +1110,25 @@ function ScoutView({ profile, refresh, allProfiles }) {
     return nameOk && positionOk && regionOk && attributeOk && sportOk;
   });
 
-  const loadGrants = useCallback(async () => { try { setGrants(await api.listAccessRequestsFor(profile.id)); } catch {} }, [profile.id]);
+  const loadGrants = useCallback(async () => { try { setGrants(await api.listMyAccessRequests()); } catch {} }, []);
   useEffect(() => { loadGrants(); }, [loadGrants]);
 
   const statusFor = (playerId) => grants.find((g) => g.playerId === playerId)?.status || null;
 
   const requestAccess = async (playerId) => {
     setBusy(true);
-    try { await api.sendAccessRequest(profile.id, getOwnerToken(profile.id), playerId); await loadGrants(); }
+    try { await api.sendAccessRequest(playerId); await loadGrants(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
 
   const save = async () => {
     setBusy(true);
-    try { await api.updateProfile(profile.id, { ...profile, ...draft }, getOwnerToken(profile.id)); setEditing(false); await refresh(); }
+    try { await api.updateMyProfile(draft); setEditing(false); await refresh(); }
     catch (e) { alert(e.message); }
     setBusy(false);
   };
-  const upgrade = async () => { setBusy(true); try { await api.upgradeProfile(profile.id, getOwnerToken(profile.id)); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
+  const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
 
   const accepted = grants.filter((g) => g.status === "accepted").map((g) => players.find((p) => p.id === g.playerId)).filter(Boolean);
 
@@ -1045,11 +1137,15 @@ function ScoutView({ profile, refresh, allProfiles }) {
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><Pill tone="blue">{accepted.length} player{accepted.length === 1 ? "" : "s"} on profile</Pill></div>
+          <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+            <Avatar url={profile.avatarUrl} size={52} fallbackIcon={Briefcase} fallbackColor="#7FB8E0" />
+            <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><Pill tone="blue">{accepted.length} player{accepted.length === 1 ? "" : "s"} on profile</Pill></div>
+          </div>
           <Btn variant="ghost" onClick={() => setEditing((v) => !v)}>{editing ? "Cancel" : "Edit"}</Btn>
         </div>
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={Briefcase} fallbackColor="#7FB8E0" />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <Field label="Achievements"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.achievements} onChange={(e) => setDraft({ ...draft, achievements: e.target.value })} placeholder="Placed 6 players in professional contracts since 2020" /></Field>
             <Btn onClick={save} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : "Save changes"}</Btn>
@@ -1068,7 +1164,7 @@ function ScoutView({ profile, refresh, allProfiles }) {
         {accepted.map((p) => (
           <div key={p.id} style={{ padding: "10px 0", borderTop: "1px solid var(--turf-500)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}><JerseyBadge number={p.jerseyNumber} size={32} /><div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position}</div></div></div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}><Avatar url={p.avatarUrl} size={32} fallbackIcon={User} /><div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position}</div></div></div>
               <Btn variant="ghost" onClick={() => setChatWith(chatWith === p.id ? null : p.id)}><MessageCircle size={13} /> Message</Btn>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
@@ -1078,7 +1174,7 @@ function ScoutView({ profile, refresh, allProfiles }) {
               {p.linkedAgents?.length > 1 && <Pill>{p.linkedAgents.length} agents linked</Pill>}
             </div>
             {p.contactInfo && <div style={{ fontSize: 12, color: "var(--line-grey)", marginTop: 6 }}>Contact: {p.contactInfo}</div>}
-            {chatWith === p.id && <ChatPanel meId={profile.id} meOwnerToken={getOwnerToken(profile.id)} otherId={p.id} otherName={p.name} onClose={() => setChatWith(null)} />}
+            {chatWith === p.id && <ChatPanel meId={profile.id} otherId={p.id} otherName={p.name} onClose={() => setChatWith(null)} />}
           </div>
         ))}
       </TeamSheetCard>
@@ -1108,16 +1204,12 @@ function ScoutView({ profile, refresh, allProfiles }) {
           return (
             <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)", gap: 10 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <JerseyBadge number={p.jerseyNumber} size={28} />
+                <Avatar url={p.avatarUrl} size={28} fallbackIcon={User} />
                 <div style={{ fontSize: 14 }}>
                   {p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {p.positions || p.position}</span>
                   {p.sport && <span style={{ color: "var(--line-grey)" }}> \u00b7 {p.sport}</span>}
                   {p.region && <span style={{ color: "var(--line-grey)" }}> \u00b7 {p.region}</span>}
-                  {p.attributes?.length > 0 && (
-                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                      {p.attributes.map((a, i) => <Pill key={i} tone="blue">{a}</Pill>)}
-                    </div>
-                  )}
+                  {p.attributes?.length > 0 && <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>{p.attributes.map((a, i) => <Pill key={i} tone="blue">{a}</Pill>)}</div>}
                 </div>
               </div>
               {status === "accepted" ? <Pill tone="amber">Linked</Pill> : status === "pending" ? <Pill>Requested</Pill> : <Btn onClick={() => requestAccess(p.id)} disabled={busy}>Request access</Btn>}
@@ -1171,7 +1263,7 @@ function StatBlock({ label, value, tone }) {
   );
 }
 
-function AdminView({ profile }) {
+function AdminView() {
   const [stats, setStats] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1179,10 +1271,10 @@ function AdminView({ profile }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try { setStats(await api.adminStats(profile.id, getOwnerToken(profile.id))); }
+    try { setStats(await api.adminStats()); }
     catch (e) { setError(e.message); }
     setLoading(false);
-  }, [profile.id]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1199,17 +1291,13 @@ function AdminView({ profile }) {
           <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700 }}>Admin dashboard</div>
           <Btn variant="ghost" onClick={load}>Refresh</Btn>
         </div>
-        <div style={{ fontSize: 12, color: "var(--line-grey)", marginTop: 4 }}>
-          Read-only usage snapshot from what's actually stored - no separate analytics/event tracking is wired up yet.
-        </div>
+        <div style={{ fontSize: 12, color: "var(--line-grey)", marginTop: 4 }}>Read-only usage snapshot from what's actually stored - no separate analytics/event tracking is wired up yet.</div>
       </TeamSheetCard>
 
       <TeamSheetCard style={{ marginBottom: 16 }}>
         <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, marginBottom: 14 }}>Profiles ({totalProfiles} total)</div>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-          {Object.entries(TYPE_META).filter(([k]) => k !== "admin").map(([key, meta]) => (
-            <StatBlock key={key} label={meta.label} value={stats.profileCounts[key] || 0} />
-          ))}
+          {Object.entries(TYPE_META).filter(([k]) => k !== "admin").map(([key, meta]) => <StatBlock key={key} label={meta.label} value={stats.profileCounts[key] || 0} />)}
         </div>
       </TeamSheetCard>
 
@@ -1241,9 +1329,6 @@ function AdminView({ profile }) {
           <StatBlock label="Coach join requests" value={stats.pendingCoachRequests} />
           <StatBlock label="Scout access requests" value={stats.accessGrantCounts.pending || 0} />
         </div>
-        <div style={{ fontSize: 12, color: "var(--line-grey)", marginTop: 10 }}>
-          High numbers here mean requests are piling up unanswered - possibly worth a reminder notification feature.
-        </div>
       </TeamSheetCard>
 
       <TeamSheetCard>
@@ -1264,31 +1349,33 @@ function AdminView({ profile }) {
 
 // ---------- App ----------
 export default function App() {
-  const [loading, setLoading] = useState(true);
+  const [phase, setPhase] = useState("loading"); // loading | auth | setup | app
   const [loadError, setLoadError] = useState(null);
-  const [myProfiles, setMyProfiles] = useState([]);
-  const [activeId, setActiveId] = useState(null);
+  const [email, setEmail] = useState(null);
   const [activeProfile, setActiveProfile] = useState(null);
   const [allProfiles, setAllProfiles] = useState([]);
   const [posts, setPosts] = useState([]);
   const [liveMatches, setLiveMatches] = useState([]);
   const [nav, setNav] = useState("profile");
-  const [switching, setSwitching] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
 
   const bootstrap = useCallback(async () => {
     setLoadError(null);
+    if (!getToken()) { setPhase("auth"); return; }
     try {
-      const mine = getMyProfiles();
-      const active = getActiveProfileId();
+      const me = await api.me();
+      setEmail(me.email);
+      if (!me.profile) { setPhase("setup"); return; }
+      setActiveProfile(me.profile);
       const [profiles, allPosts, live] = await Promise.all([api.listProfiles(), api.listPosts(), api.listLiveMatches("live")]);
-      setMyProfiles(mine);
       setAllProfiles(profiles);
       setPosts(allPosts);
       setLiveMatches(live);
-      if (active) { setActiveId(active); setActiveProfile(profiles.find((p) => p.id === active) || null); }
-    } catch (e) { setLoadError(e.message); }
-    setLoading(false);
+      setPhase("app");
+    } catch (e) {
+      if (e.status === 401) { clearToken(); setPhase("auth"); }
+      else { setLoadError(e.message); setPhase("error"); }
+    }
   }, []);
 
   useEffect(() => { bootstrap(); }, [bootstrap]);
@@ -1296,39 +1383,31 @@ export default function App() {
   const refresh = useCallback(async () => {
     const profiles = await api.listProfiles();
     setAllProfiles(profiles);
-    if (activeId) setActiveProfile(profiles.find((p) => p.id === activeId) || null);
-  }, [activeId]);
+    const me = await api.me();
+    if (me.profile) setActiveProfile(me.profile);
+  }, []);
 
   const refreshPosts = useCallback(async () => { setPosts(await api.listPosts()); }, []);
   const refreshLive = useCallback(async () => { setLiveMatches(await api.listLiveMatches("live")); }, []);
 
-  const handleCreated = async (id) => {
-    setMyProfiles(getMyProfiles());
-    setActiveId(id);
-    const profiles = await api.listProfiles();
-    setAllProfiles(profiles);
-    setActiveProfile(profiles.find((p) => p.id === id) || null);
-    setNav("profile");
-  };
+  const handleProfileCreated = (profile) => { setActiveProfile(profile); bootstrap(); };
 
-  const switchProfile = async (id) => { setActiveProfileId(id); setActiveId(id); setSwitching(false); await refresh(); setNav("profile"); };
+  const logout = () => { clearToken(); setActiveProfile(null); setEmail(null); setPhase("auth"); };
 
-  const makePost = async (partial) => {
-    const post = { id: uid(), timestamp: now(), ...partial };
-    await api.createPost(post, getOwnerToken(partial.authorId));
-    await refreshPosts();
-  };
+  const makePost = async (partial) => { await api.createPost(partial); await refreshPosts(); };
 
   const submitLiveScore = async (matchId, score) => {
     setLiveBusy(true);
-    try { await api.submitLiveScore(matchId, activeProfile.id, getOwnerToken(activeProfile.id), score); await refreshLive(); }
+    try { await api.submitLiveScore(matchId, score); await refreshLive(); }
     catch (e) { alert(e.message); }
     setLiveBusy(false);
   };
 
-  if (loading) return <div style={rootStyle}><Shell><div style={{ textAlign: "center", padding: 60, color: "var(--line-grey)" }}><Loader2 className="spin" size={22} /></div></Shell></div>;
-  if (loadError) return <div style={rootStyle}><Shell><Onboarding onCreated={handleCreated} errorBanner={`Could not reach the server: ${loadError}`} /></Shell></div>;
-  if (!activeProfile) return <div style={rootStyle}><Shell><Onboarding onCreated={handleCreated} /></Shell></div>;
+  if (phase === "loading") return <div style={rootStyle}><Shell><div style={{ textAlign: "center", padding: 60, color: "var(--line-grey)" }}><Loader2 className="spin" size={22} /></div></Shell></div>;
+  if (phase === "error") return <div style={rootStyle}><Shell><AuthScreen onAuthed={bootstrap} errorBanner={`Could not reach the server: ${loadError}`} /></Shell></div>;
+  if (phase === "auth") return <div style={rootStyle}><Shell><AuthScreen onAuthed={bootstrap} /></Shell></div>;
+  if (phase === "setup") return <div style={rootStyle}><Shell><ProfileSetup onCreated={handleProfileCreated} /></Shell></div>;
+  if (!activeProfile) return <div style={rootStyle}><Shell><div style={{ textAlign: "center", padding: 60, color: "var(--line-grey)" }}><Loader2 className="spin" size={22} /></div></Shell></div>;
 
   const clubs = allProfiles.filter((p) => p.type === "club");
 
@@ -1337,23 +1416,15 @@ export default function App() {
       <Shell>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, letterSpacing: 0.5, color: "var(--floodlight)" }}>PITCHSIDE</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6 }}>
               {["profile", "feed"].map((n) => (
                 <button key={n} onClick={() => setNav(n)} style={{ background: nav === n ? "var(--turf-500)" : "transparent", border: "1px solid var(--turf-500)", color: "var(--chalk)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{n === "profile" ? "My profile" : "Feed"}</button>
               ))}
             </div>
-            <button onClick={() => setSwitching((v) => !v)} title="Switch profile" style={{ background: "transparent", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 10px", color: "var(--chalk)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 13 }}>
-              <LogOut size={13} /> {activeProfile.name}
+            <button onClick={logout} title="Log out" style={{ background: "transparent", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 10px", color: "var(--chalk)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 13 }}>
+              <LogOut size={13} /> Log out
             </button>
-            {switching && (
-              <div style={{ position: "absolute", top: 38, right: 0, background: "var(--turf-700)", border: "1px solid var(--turf-500)", borderRadius: 8, padding: 8, zIndex: 10, minWidth: 200 }}>
-                {myProfiles.map((p) => (
-                  <button key={p.id} onClick={() => switchProfile(p.id)} style={{ display: "block", width: "100%", textAlign: "left", background: p.id === activeId ? "var(--turf-500)" : "transparent", border: "none", color: "var(--chalk)", padding: "7px 9px", borderRadius: 5, cursor: "pointer", fontSize: 13 }}>{p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {TYPE_META[p.type].label}</span></button>
-                ))}
-                <button onClick={() => { setSwitching(false); setActiveProfile(null); setActiveId(null); }} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderTop: "1px solid var(--turf-500)", marginTop: 6, color: "var(--floodlight)", padding: "7px 9px", cursor: "pointer", fontSize: 13 }}><Plus size={12} style={{ verticalAlign: -1, marginRight: 4 }} />New profile</button>
-              </div>
-            )}
           </div>
         </div>
 
@@ -1361,7 +1432,7 @@ export default function App() {
         {nav === "profile" && activeProfile.type === "club" && <ClubView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} onPost={makePost} />}
         {nav === "profile" && activeProfile.type === "scout" && <ScoutView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} />}
         {nav === "profile" && activeProfile.type === "coach" && <CoachView profile={activeProfile} refresh={refresh} clubs={clubs} />}
-        {nav === "profile" && activeProfile.type === "admin" && <AdminView profile={activeProfile} />}
+        {nav === "profile" && activeProfile.type === "admin" && <AdminView />}
         {nav === "profile" && activeProfile.type === "supporter" && (
           <div>
             <SupporterProfileCard profile={activeProfile} refresh={refresh} clubs={clubs} />
