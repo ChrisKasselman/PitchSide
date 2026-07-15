@@ -1088,7 +1088,7 @@ function SupporterUpload({ profile, onPost }) {
 }
 
 // ---------- Scout view ----------
-function ScoutView({ profile, refresh, allProfiles }) {
+function ScoutView({ profile, refresh, allProfiles, onViewProfile }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ bio: profile.bio || "", achievements: profile.achievements || "", avatarUrl: profile.avatarUrl || null });
   const [busy, setBusy] = useState(false);
@@ -1164,8 +1164,11 @@ function ScoutView({ profile, refresh, allProfiles }) {
         {accepted.map((p) => (
           <div key={p.id} style={{ padding: "10px 0", borderTop: "1px solid var(--turf-500)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}><Avatar url={p.avatarUrl} size={32} fallbackIcon={User} /><div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position}</div></div></div>
-              <Btn variant="ghost" onClick={() => setChatWith(chatWith === p.id ? null : p.id)}><MessageCircle size={13} /> Message</Btn>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }} onClick={() => onViewProfile(p.id)}><Avatar url={p.avatarUrl} size={32} fallbackIcon={User} /><div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{p.positions || p.position}</div></div></div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn variant="ghost" onClick={() => onViewProfile(p.id)}>View</Btn>
+                <Btn variant="ghost" onClick={() => setChatWith(chatWith === p.id ? null : p.id)}><MessageCircle size={13} /> Message</Btn>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               {p.openToOffers && <Pill tone="blue">Open to offers</Pill>}
@@ -1203,7 +1206,7 @@ function ScoutView({ profile, refresh, allProfiles }) {
           const status = statusFor(p.id);
           return (
             <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)", gap: 10 }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", cursor: "pointer" }} onClick={() => onViewProfile(p.id)}>
                 <Avatar url={p.avatarUrl} size={28} fallbackIcon={User} />
                 <div style={{ fontSize: 14 }}>
                   {p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {p.positions || p.position}</span>
@@ -1254,7 +1257,7 @@ function PostCard({ post }) {
 }
 
 // ---------- Friends ----------
-function FriendsView({ myProfile, allProfiles, refreshFeeds }) {
+function FriendsView({ myProfile, allProfiles, refreshFeeds, onViewProfile }) {
   const [friends, setFriends] = useState([]);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
@@ -1305,7 +1308,7 @@ function FriendsView({ myProfile, allProfiles, refreshFeeds }) {
             const meta = TYPE_META[p.type] || TYPE_META.supporter;
             return (
               <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }} onClick={() => onViewProfile(p.id)}>
                   <Avatar url={p.avatarUrl} size={32} fallbackIcon={meta.icon} fallbackColor={meta.color} />
                   <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{meta.label}</div></div>
                 </div>
@@ -1332,7 +1335,10 @@ function FriendsView({ myProfile, allProfiles, refreshFeeds }) {
                 <Avatar url={p.avatarUrl} size={32} fallbackIcon={meta.icon} fallbackColor={meta.color} />
                 <div><div style={{ fontWeight: 600, fontSize: 14 }}>{p.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{meta.label}</div></div>
               </div>
-              <Btn variant="ghost" onClick={() => remove(f.otherId)} disabled={busy}>Remove</Btn>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn variant="ghost" onClick={() => onViewProfile(p.id)}>View</Btn>
+                <Btn variant="ghost" onClick={() => remove(f.otherId)} disabled={busy}>Remove</Btn>
+              </div>
             </div>
           );
         })}
@@ -1360,7 +1366,7 @@ function FriendsView({ myProfile, allProfiles, refreshFeeds }) {
           const rel = statusFor(p.id);
           return (
             <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--turf-500)" }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }} onClick={() => onViewProfile(p.id)}>
                 <Avatar url={p.avatarUrl} size={28} fallbackIcon={meta.icon} fallbackColor={meta.color} />
                 <div style={{ fontSize: 14 }}>{p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {meta.label}</span></div>
               </div>
@@ -1470,6 +1476,150 @@ function AdminView() {
   );
 }
 
+// ---------- Profile detail (read-only view of someone else's profile) ----------
+function ProfileDetailView({ profileId, viewerProfile, allProfiles, onClose }) {
+  const profile = allProfiles.find((p) => p.id === profileId);
+  const [scoutAccess, setScoutAccess] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      if (viewerProfile.type === "scout" && profile?.type === "player") {
+        try {
+          const grants = await api.listMyAccessRequests();
+          const g = grants.find((g) => g.playerId === profile.id);
+          if (!cancelled) setScoutAccess(g?.status === "accepted");
+        } catch { if (!cancelled) setScoutAccess(false); }
+      } else {
+        setScoutAccess(false);
+      }
+    }
+    check();
+    return () => { cancelled = true; };
+  }, [profile?.id, viewerProfile.type]);
+
+  if (!profile) return <TeamSheetCard><div style={{ color: "var(--line-grey)", fontSize: 13 }}>Profile not found.</div></TeamSheetCard>;
+
+  const meta = TYPE_META[profile.type] || TYPE_META.supporter;
+  const canSeeScoutingDetails = profile.id === viewerProfile.id || scoutAccess;
+
+  return (
+    <div>
+      <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--line-grey)", display: "flex", alignItems: "center", gap: 4, marginBottom: 14, cursor: "pointer", padding: 0, fontSize: 13 }}><ChevronLeft size={14} /> Back</button>
+      <TeamSheetCard>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <Avatar url={profile.avatarUrl} size={56} fallbackIcon={meta.icon} fallbackColor={meta.color} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
+            <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{meta.label}</div>
+          </div>
+        </div>
+
+        {profile.type === "player" && (
+          <>
+            <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {profile.sport && <Pill>{profile.sport}</Pill>}
+              {(profile.positions || profile.position) && <Pill tone="amber">{profile.positions || profile.position}</Pill>}
+              {profile.openToOffers && canSeeScoutingDetails && <Pill tone="blue">Open to offers</Pill>}
+            </div>
+            {profile.bio && <div style={{ marginTop: 14, fontSize: 14 }}>{profile.bio}</div>}
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12, color: "var(--line-grey)", flexWrap: "wrap" }}>
+              {profile.weight && <span>{profile.weight}</span>}
+              {profile.height && <span>{profile.height}</span>}
+              {profile.age && <span>{profile.age} yrs</span>}
+              {profile.hobbies && <span>Hobbies: {profile.hobbies}</span>}
+              {profile.region && <span>Based in {profile.region}</span>}
+            </div>
+            {profile.stats && (
+              <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14, flexWrap: "wrap" }}>
+                {statLabelsFor(profile.sport).map(([key, label]) => (
+                  <div key={key}><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{profile.stats[key]}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>{label}</div></div>
+                ))}
+              </div>
+            )}
+            {profile.career?.length > 0 && (
+              <div style={{ marginTop: 14, fontSize: 13 }}>
+                <div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 6 }}>Career</div>
+                {profile.career.map((c, i) => <div key={i} style={{ color: "var(--chalk)" }}>{c.club} {c.from && `(${c.from}${c.to ? ` - ${c.to}` : " - present"})`}</div>)}
+              </div>
+            )}
+            {profile.achievements?.length > 0 && (
+              <div style={{ marginTop: 14, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {profile.achievements.map((a, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{a}</Pill>)}
+              </div>
+            )}
+            {profile.attributes?.length > 0 && (
+              <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {profile.attributes.map((a, i) => <Pill key={i} tone="blue">{a}</Pill>)}
+              </div>
+            )}
+            <GalleryDisplay photos={profile.gallery} />
+
+            {canSeeScoutingDetails && (profile.currentContract || profile.askingSalary || profile.contactInfo) && (
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+                <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Contract &amp; scouting details</div>
+                {profile.currentContract && <div style={{ fontSize: 13, marginBottom: 4 }}>Contract: {profile.currentContract}</div>}
+                {profile.askingSalary && <div style={{ fontSize: 13, marginBottom: 4 }}>Asking: {profile.askingSalary}</div>}
+                {profile.contactInfo && <div style={{ fontSize: 13 }}>Contact: {profile.contactInfo}</div>}
+              </div>
+            )}
+            {!canSeeScoutingDetails && viewerProfile.type === "scout" && (
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14, fontSize: 12, color: "var(--line-grey)" }}>
+                Contract, salary, and contact details are hidden until this player accepts your access request.
+              </div>
+            )}
+          </>
+        )}
+
+        {profile.type === "club" && (
+          <>
+            <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span>{profile.location} \u00b7 {profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>
+              {profile.sport && <Pill>{profile.sport}</Pill>}
+            </div>
+            {profile.trophies?.length > 0 && <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>{profile.trophies.map((t, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{t}</Pill>)}</div>}
+            {profile.currentLog && <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap" }}>{profile.currentLog}</div>}
+            <GalleryDisplay photos={profile.gallery} />
+            <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+              <div><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{(profile.roster || []).length}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>Squad</div></div>
+              <div><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "#6FBFAE" }}>{(profile.coachRoster || []).length}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>Coaching staff</div></div>
+            </div>
+          </>
+        )}
+
+        {profile.type === "coach" && (
+          <>
+            {profile.bio && <div style={{ marginTop: 14, fontSize: 14 }}>{profile.bio}</div>}
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12, color: "var(--line-grey)", flexWrap: "wrap" }}>
+              {profile.qualifications && <span>{profile.qualifications}</span>}
+              {profile.yearsExperience && <span>{profile.yearsExperience} yrs experience</span>}
+            </div>
+            {profile.achievements?.length > 0 && (
+              <div style={{ marginTop: 14, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {profile.achievements.map((a, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{a}</Pill>)}
+              </div>
+            )}
+          </>
+        )}
+
+        {profile.type === "supporter" && (
+          <>
+            {profile.bio && <div style={{ marginTop: 14, fontSize: 14 }}>{profile.bio}</div>}
+            {profile.career && <div style={{ marginTop: 8, fontSize: 13, color: "var(--line-grey)" }}>{profile.career}</div>}
+          </>
+        )}
+
+        {profile.type === "scout" && (
+          <>
+            {profile.bio && <div style={{ marginTop: 14, fontSize: 14 }}>{profile.bio}</div>}
+            {profile.achievements && <div style={{ marginTop: 8, fontSize: 13, color: "var(--line-grey)" }}>{profile.achievements}</div>}
+          </>
+        )}
+      </TeamSheetCard>
+    </div>
+  );
+}
+
 // ---------- App ----------
 export default function App() {
   const [phase, setPhase] = useState("loading"); // loading | auth | setup | app
@@ -1481,6 +1631,7 @@ export default function App() {
   const [liveMatches, setLiveMatches] = useState([]);
   const [nav, setNav] = useState("profile");
   const [feedScope, setFeedScope] = useState("public");
+  const [viewingProfileId, setViewingProfileId] = useState(null);
   const [liveBusy, setLiveBusy] = useState(false);
 
   const bootstrap = useCallback(async () => {
@@ -1546,7 +1697,7 @@ export default function App() {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6 }}>
               {["profile", "feed", "friends"].map((n) => (
-                <button key={n} onClick={() => setNav(n)} style={{ background: nav === n ? "var(--turf-500)" : "transparent", border: "1px solid var(--turf-500)", color: "var(--chalk)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{n === "profile" ? "My profile" : n === "feed" ? "Feed" : "Friends"}</button>
+                <button key={n} onClick={() => { setNav(n); setViewingProfileId(null); }} style={{ background: nav === n ? "var(--turf-500)" : "transparent", border: "1px solid var(--turf-500)", color: "var(--chalk)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{n === "profile" ? "My profile" : n === "feed" ? "Feed" : "Friends"}</button>
               ))}
             </div>
             <button onClick={logout} title="Log out" style={{ background: "transparent", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 10px", color: "var(--chalk)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 13 }}>
@@ -1555,33 +1706,39 @@ export default function App() {
           </div>
         </div>
 
-        {nav === "profile" && activeProfile.type === "player" && <PlayerView profile={activeProfile} refresh={refresh} clubs={clubs} />}
-        {nav === "profile" && activeProfile.type === "club" && <ClubView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} onPost={makePost} />}
-        {nav === "profile" && activeProfile.type === "scout" && <ScoutView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} />}
-        {nav === "profile" && activeProfile.type === "coach" && <CoachView profile={activeProfile} refresh={refresh} clubs={clubs} />}
-        {nav === "profile" && activeProfile.type === "admin" && <AdminView />}
-        {nav === "profile" && activeProfile.type === "supporter" && (
-          <div>
-            <SupporterProfileCard profile={activeProfile} refresh={refresh} clubs={clubs} />
-            {liveMatches.map((m) => <LiveMatchCard key={m.id} match={m} viewerType="supporter" onSubmitScore={submitLiveScore} busy={liveBusy} />)}
-            <SupporterUpload profile={activeProfile} onPost={makePost} />
-            {posts.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13, textAlign: "center", padding: 20 }}>No posts yet. Yours could be the first.</div>}
-            {posts.map((p) => <PostCard key={p.id} post={p} />)}
-          </div>
+        {viewingProfileId ? (
+          <ProfileDetailView profileId={viewingProfileId} viewerProfile={activeProfile} allProfiles={allProfiles} onClose={() => setViewingProfileId(null)} />
+        ) : (
+          <>
+            {nav === "profile" && activeProfile.type === "player" && <PlayerView profile={activeProfile} refresh={refresh} clubs={clubs} />}
+            {nav === "profile" && activeProfile.type === "club" && <ClubView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} onPost={makePost} />}
+            {nav === "profile" && activeProfile.type === "scout" && <ScoutView profile={activeProfile} refresh={refresh} allProfiles={allProfiles} onViewProfile={setViewingProfileId} />}
+            {nav === "profile" && activeProfile.type === "coach" && <CoachView profile={activeProfile} refresh={refresh} clubs={clubs} />}
+            {nav === "profile" && activeProfile.type === "admin" && <AdminView />}
+            {nav === "profile" && activeProfile.type === "supporter" && (
+              <div>
+                <SupporterProfileCard profile={activeProfile} refresh={refresh} clubs={clubs} />
+                {liveMatches.map((m) => <LiveMatchCard key={m.id} match={m} viewerType="supporter" onSubmitScore={submitLiveScore} busy={liveBusy} />)}
+                <SupporterUpload profile={activeProfile} onPost={makePost} />
+                {posts.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13, textAlign: "center", padding: 20 }}>No posts yet. Yours could be the first.</div>}
+                {posts.map((p) => <PostCard key={p.id} post={p} />)}
+              </div>
+            )}
+            {nav === "feed" && (
+              <div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                  {["public", "friends"].map((s) => (
+                    <button key={s} onClick={() => { setFeedScope(s); refreshPosts(s); }} style={{ background: feedScope === s ? "var(--floodlight)" : "transparent", color: feedScope === s ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{s === "public" ? "Public" : "Friends"}</button>
+                  ))}
+                </div>
+                {liveMatches.map((m) => <LiveMatchCard key={m.id} match={m} viewerType={activeProfile.type === "supporter" ? "supporter" : "viewer"} onSubmitScore={submitLiveScore} busy={liveBusy} />)}
+                {posts.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13, textAlign: "center", padding: 20 }}>{feedScope === "friends" ? "Nothing here yet - add some friends or wait for them to post." : "Nothing on the feed yet. Post a lineup, achievement, or matchday update to get started."}</div>}
+                {posts.map((p) => <PostCard key={p.id} post={p} />)}
+              </div>
+            )}
+            {nav === "friends" && <FriendsView myProfile={activeProfile} allProfiles={allProfiles} refreshFeeds={() => refreshPosts()} onViewProfile={setViewingProfileId} />}
+          </>
         )}
-        {nav === "feed" && (
-          <div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              {["public", "friends"].map((s) => (
-                <button key={s} onClick={() => { setFeedScope(s); refreshPosts(s); }} style={{ background: feedScope === s ? "var(--floodlight)" : "transparent", color: feedScope === s ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>{s === "public" ? "Public" : "Friends"}</button>
-              ))}
-            </div>
-            {liveMatches.map((m) => <LiveMatchCard key={m.id} match={m} viewerType={activeProfile.type === "supporter" ? "supporter" : "viewer"} onSubmitScore={submitLiveScore} busy={liveBusy} />)}
-            {posts.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13, textAlign: "center", padding: 20 }}>{feedScope === "friends" ? "Nothing here yet - add some friends or wait for them to post." : "Nothing on the feed yet. Post a lineup, achievement, or matchday update to get started."}</div>}
-            {posts.map((p) => <PostCard key={p.id} post={p} />)}
-          </div>
-        )}
-        {nav === "friends" && <FriendsView myProfile={activeProfile} allProfiles={allProfiles} refreshFeeds={() => refreshPosts()} />}
       </Shell>
     </div>
   );

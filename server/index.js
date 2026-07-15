@@ -36,6 +36,18 @@ function authenticate(req, res, next) {
   }
 }
 
+// Like authenticate, but never rejects - just attaches req.userId if a valid
+// token happens to be present. Used on public read endpoints that still need
+// to know "who's asking" to decide what to include (e.g. private player fields).
+function optionalAuthenticate(req, res, next) {
+  const header = req.get("authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (token && SESSION_SECRET) {
+    try { req.userId = jwt.verify(token, SESSION_SECRET).userId; } catch { /* ignore, treat as anonymous */ }
+  }
+  next();
+}
+
 async function getMyProfileRow(userId) {
   const { rows } = await pool.query("SELECT * FROM profiles WHERE user_id = $1", [userId]);
   return rows[0] || null;
@@ -77,6 +89,31 @@ const rowToProfile = (row) => ({
 });
 const rowToPost = (row) => ({ ...row.payload, id: row.id });
 const rowToLiveMatch = (row) => ({ ...row.payload, id: row.id, clubId: row.club_id, status: row.status });
+
+// Contract/salary/contact are only sent to the player themselves or a scout
+// they've accepted - everyone else gets the profile with those fields removed.
+// This is enforced here, not just hidden in the UI, so it can't be read
+// straight out of the network response either.
+const PRIVATE_PLAYER_FIELDS = ["currentContract", "askingSalary", "contactInfo"];
+
+async function visiblePlayerIdsForViewer(userId) {
+  if (!userId) return new Set();
+  const me = await getMyProfileRow(userId);
+  if (!me) return new Set();
+  const set = new Set([me.id]);
+  if (me.type === "scout") {
+    const { rows } = await pool.query("SELECT player_id FROM access_grants WHERE scout_id = $1 AND status = 'accepted'", [me.id]);
+    rows.forEach((r) => set.add(r.player_id));
+  }
+  return set;
+}
+
+function sanitizeProfile(profile, visibleIds) {
+  if (profile.type !== "player" || visibleIds.has(profile.id)) return profile;
+  const clean = { ...profile };
+  for (const field of PRIVATE_PLAYER_FIELDS) delete clean[field];
+  return clean;
+}
 
 // ---- auth endpoints ----
 
@@ -122,18 +159,20 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 
 // ---- profiles ----
 
-app.get("/api/profiles", async (req, res) => {
+app.get("/api/profiles", optionalAuthenticate, async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT * FROM profiles ORDER BY name ASC");
-    res.json(rows.map(rowToProfile));
+    const visibleIds = await visiblePlayerIdsForViewer(req.userId);
+    res.json(rows.map(rowToProfile).map((p) => sanitizeProfile(p, visibleIds)));
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not load profiles." }); }
 });
 
-app.get("/api/profiles/:id", async (req, res) => {
+app.get("/api/profiles/:id", optionalAuthenticate, async (req, res) => {
   try {
     const row = await getProfileRow(req.params.id);
     if (!row) return res.status(404).json({ error: "Profile not found." });
-    res.json(rowToProfile(row));
+    const visibleIds = await visiblePlayerIdsForViewer(req.userId);
+    res.json(sanitizeProfile(rowToProfile(row), visibleIds));
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not load profile." }); }
 });
 

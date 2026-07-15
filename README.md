@@ -83,6 +83,14 @@ database doesn't scale indefinitely.
   either side can remove the connection later. A dedicated "Friends" tab
   handles requests and search; the "Feed" tab has a Public/Friends toggle -
   Friends shows only your own posts plus posts from accepted friends.
+- **Viewing someone's profile:** clicking a name anywhere (friends list,
+  friend requests, search, a scout's talent discovery or accepted-players
+  list) opens a read-only view of that profile - stats, career, gallery,
+  achievements, everything they've made public. A player's contract, asking
+  salary, and contact details are only included for the player themselves or
+  a scout they've explicitly accepted - this is enforced by the **server**,
+  not just hidden in the UI, so it can't be read out of the network response
+  either.
 
 **Note on "Team" vs "club":** the person-facing label is "Team" everywhere in
 the UI, but the underlying `type` value stored in the database is still
