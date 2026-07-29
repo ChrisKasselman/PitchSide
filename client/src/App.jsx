@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Shield, User, Users, Trophy, Camera, Check, X, Plus, ChevronLeft, Newspaper,
   LogOut, Loader2, ImagePlus, Search, MessageCircle, Radio, Briefcase, ClipboardList,
-  LayoutDashboard, Mail, Lock, ImageOff,
+  LayoutDashboard, Mail, Lock, ImageOff, FileText, Facebook, Instagram, Youtube,
+  Twitter, Linkedin, MapPin, Calendar, Share2, Download, Phone, Building2,
 } from "lucide-react";
 import { api, getToken, setToken, clearToken } from "./api.js";
 
@@ -11,6 +12,9 @@ const fmtDate = (iso) => {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " \u00b7 " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 };
+// Prefers the structured country/suburb fields; falls back to the old
+// free-text `location` string on profiles created before that existed.
+const formatLocation = (p) => (p.suburb || p.country) ? [p.suburb, p.country].filter(Boolean).join(", ") : (p.location || p.region || "");
 
 async function resizeImage(file, maxW = 640, quality = 0.7) {
   return new Promise((resolve, reject) => {
@@ -52,6 +56,38 @@ const SPORT_STATS = {
   Other: [["gamesPlayed", "Games"], ["tries", "Score A"], ["conversions", "Score B"], ["playerOfMatch", "POTM"]],
 };
 const statLabelsFor = (sport) => SPORT_STATS[sport] || SPORT_STATS.Other;
+
+const COUNTRIES = [
+  "South Africa", "Namibia", "Botswana", "Zimbabwe", "Zambia", "Mozambique", "Lesotho", "Eswatini",
+  "Kenya", "Tanzania", "Uganda", "Nigeria", "Ghana", "Egypt", "Morocco", "Algeria",
+  "United Kingdom", "Ireland", "France", "Germany", "Netherlands", "Belgium", "Spain", "Portugal",
+  "Italy", "Switzerland", "Sweden", "Norway", "Denmark", "Poland",
+  "United States", "Canada", "Mexico", "Brazil", "Argentina", "Chile",
+  "Australia", "New Zealand", "India", "Pakistan", "Sri Lanka", "Bangladesh",
+  "China", "Japan", "South Korea", "United Arab Emirates", "Saudi Arabia", "Other",
+];
+
+// Multiple positions can be selected since a player often covers more than one.
+const POSITIONS_BY_SPORT = {
+  Rugby: ["Prop", "Hooker", "Lock", "Flanker", "Number 8", "Scrum-half", "Fly-half", "Centre", "Wing", "Fullback"],
+  Football: ["Goalkeeper", "Right Back", "Centre Back", "Left Back", "Defensive Midfielder", "Central Midfielder", "Attacking Midfielder", "Right Winger", "Left Winger", "Striker"],
+  Cricket: ["Opening Batter", "Middle-order Batter", "All-rounder", "Wicket-keeper", "Fast Bowler", "Spin Bowler"],
+  Netball: ["Goal Shooter", "Goal Attack", "Wing Attack", "Centre", "Wing Defence", "Goal Defence", "Goal Keeper"],
+  Hockey: ["Goalkeeper", "Left Back", "Right Back", "Centre Back", "Left Half", "Centre Half", "Right Half", "Left Wing", "Right Wing", "Centre Forward"],
+};
+
+// Starting-lineup slot templates per sport, used by the formation-style lineup
+// builder - since more than one player can share a position, the manager
+// picks a specific person for each numbered slot rather than a flat checklist.
+const LINEUP_SLOTS_BY_SPORT = {
+  Rugby: ["1. Prop", "2. Hooker", "3. Prop", "4. Lock", "5. Lock", "6. Flanker", "7. Flanker", "8. Number 8", "9. Scrum-half", "10. Fly-half", "11. Wing", "12. Centre", "13. Centre", "14. Wing", "15. Fullback"],
+  Football: ["Goalkeeper", "Left Back", "Centre Back", "Centre Back", "Right Back", "Central Midfielder", "Central Midfielder", "Attacking Midfielder", "Left Winger", "Striker", "Right Winger"],
+  Cricket: ["Batter 1", "Batter 2", "Batter 3", "Batter 4", "Batter 5", "Batter 6", "Wicket-keeper", "Bowler 1", "Bowler 2", "Bowler 3", "Bowler 4"],
+  Netball: ["Goal Shooter", "Goal Attack", "Wing Attack", "Centre", "Wing Defence", "Goal Defence", "Goal Keeper"],
+  Hockey: ["Goalkeeper", "Left Back", "Centre Back", "Right Back", "Left Half", "Centre Half", "Right Half", "Left Wing", "Centre Forward", "Right Wing"],
+  Other: ["Player 1", "Player 2", "Player 3", "Player 4", "Player 5", "Player 6", "Player 7", "Player 8", "Player 9", "Player 10", "Player 11"],
+};
+const lineupSlotsFor = (sport) => LINEUP_SLOTS_BY_SPORT[sport] || LINEUP_SLOTS_BY_SPORT.Other;
 
 // ---------- shared UI atoms ----------
 function TeamSheetCard({ children, style }) {
@@ -178,6 +214,189 @@ function GalleryDisplay({ photos }) {
   );
 }
 
+// Cover photo (wide banner) - shown behind/above the avatar.
+function CoverPhoto({ url, children }) {
+  return (
+    <div style={{ position: "relative", marginBottom: children ? -34 : 0 }}>
+      <div style={{ width: "100%", height: 120, borderRadius: 10, overflow: "hidden", background: url ? "transparent" : "linear-gradient(135deg, var(--turf-700), var(--turf-500))" }}>
+        {url && <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+      </div>
+      {children}
+    </div>
+  );
+}
+function CoverEditor({ url, onChange }) {
+  const fileRef = useRef(null);
+  const handleFile = async (e) => { const f = e.target.files[0]; if (!f) return; onChange(await resizeImage(f, 1200, 0.7)); };
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <CoverPhoto url={url} />
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <Btn variant="ghost" onClick={() => fileRef.current.click()}><ImagePlus size={13} /> {url ? "Change cover photo" : "Add cover photo"}</Btn>
+        {url && <Btn variant="ghost" onClick={() => onChange(null)}><ImageOff size={13} /></Btn>}
+      </div>
+    </div>
+  );
+}
+
+// Social links - same shape used (and edited) across every profile type.
+const SOCIAL_PLATFORMS = [
+  { key: "facebook", label: "Facebook", icon: Facebook, placeholder: "https://facebook.com/..." },
+  { key: "instagram", label: "Instagram", icon: Instagram, placeholder: "https://instagram.com/..." },
+  { key: "youtube", label: "YouTube", icon: Youtube, placeholder: "https://youtube.com/..." },
+  { key: "twitter", label: "X / Twitter", icon: Twitter, placeholder: "https://x.com/..." },
+  { key: "linkedin", label: "LinkedIn", icon: Linkedin, placeholder: "https://linkedin.com/in/..." },
+];
+function SocialLinksEditor({ links, onChange }) {
+  const l = links || {};
+  return (
+    <Field label="Social profiles">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {SOCIAL_PLATFORMS.map(({ key, icon: Icon, placeholder }) => (
+          <div key={key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon size={15} color="var(--line-grey)" style={{ flexShrink: 0 }} />
+            <input style={inputStyle} value={l[key] || ""} onChange={(e) => onChange({ ...l, [key]: e.target.value })} placeholder={placeholder} />
+          </div>
+        ))}
+      </div>
+    </Field>
+  );
+}
+function SocialLinksDisplay({ links }) {
+  const l = links || {};
+  const active = SOCIAL_PLATFORMS.filter(({ key }) => l[key]);
+  if (!active.length) return null;
+  return (
+    <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+      {active.map(({ key, icon: Icon, label }) => (
+        <a key={key} href={l[key]} target="_blank" rel="noopener noreferrer" title={label} style={{ color: "var(--line-grey)", display: "flex" }}>
+          <Icon size={18} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// Country + suburb/city, used anywhere a profile needs a structured location.
+function LocationFields({ country, suburb, onCountryChange, onSuburbChange }) {
+  return (
+    <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ flex: 1 }}>
+        <Field label="Country">
+          <select style={inputStyle} value={country || ""} onChange={(e) => onCountryChange(e.target.value)}>
+            <option value="">Select a country</option>
+            {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div style={{ flex: 1 }}>
+        <Field label="Suburb / City"><input style={inputStyle} value={suburb || ""} onChange={(e) => onSuburbChange(e.target.value)} placeholder="e.g. Sandton" /></Field>
+      </div>
+    </div>
+  );
+}
+function LocationDisplay({ country, suburb }) {
+  if (!country && !suburb) return null;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <MapPin size={12} /> {[suburb, country].filter(Boolean).join(", ")}
+    </span>
+  );
+}
+
+// Contact details (email/phone), same shape across every profile type -
+// distinct from a player's private scouting contact field, which stays
+// scout-gated and lives only on the player profile.
+function ContactFieldsEditor({ email, phone, onEmailChange, onPhoneChange }) {
+  return (
+    <div style={{ display: "flex", gap: 10 }}>
+      <div style={{ flex: 1 }}><Field label="Contact email"><input style={inputStyle} type="email" value={email || ""} onChange={(e) => onEmailChange(e.target.value)} placeholder="you@example.com" /></Field></div>
+      <div style={{ flex: 1 }}><Field label="Contact phone"><input style={inputStyle} value={phone || ""} onChange={(e) => onPhoneChange(e.target.value)} placeholder="+27 82 000 0000" /></Field></div>
+    </div>
+  );
+}
+function ContactFieldsDisplay({ email, phone }) {
+  if (!email && !phone) return null;
+  return (
+    <div style={{ display: "flex", gap: 14, fontSize: 12, color: "var(--line-grey)", flexWrap: "wrap" }}>
+      {email && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={12} /> {email}</span>}
+      {phone && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Phone size={12} /> {phone}</span>}
+    </div>
+  );
+}
+
+// Sport CV upload (Word/PDF) - stored as base64 like images, but never
+// resized (can't resize a document) and rendered as a file chip, not a preview.
+const CV_MAX_BYTES = 8 * 1024 * 1024;
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function CvUploadEditor({ cvFile, onChange }) {
+  const fileRef = useRef(null);
+  const [error, setError] = useState(null);
+  const handleFile = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setError(null);
+    if (f.size > CV_MAX_BYTES) { setError("File is too large - please keep it under 8MB."); return; }
+    const dataUrl = await readFileAsDataUrl(f);
+    onChange({ name: f.name, dataUrl, uploadedAt: new Date().toISOString() });
+  };
+  return (
+    <Field label="Sport CV (Word or PDF)">
+      {cvFile ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--turf-900)", border: "1px solid var(--turf-500)", borderRadius: 6, padding: "8px 12px" }}>
+          <FileText size={16} color="var(--floodlight)" />
+          <a href={cvFile.dataUrl} download={cvFile.name} style={{ fontSize: 13, color: "var(--chalk)", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{cvFile.name}</a>
+          <button onClick={() => onChange(null)} style={{ background: "none", border: "none", color: "var(--line-grey)", cursor: "pointer" }}><X size={14} /></button>
+        </div>
+      ) : (
+        <>
+          <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" onChange={handleFile} style={{ display: "none" }} />
+          <Btn variant="ghost" onClick={() => fileRef.current.click()}><FileText size={13} /> Upload CV</Btn>
+        </>
+      )}
+      {error && <div style={{ color: "var(--score)", fontSize: 12, marginTop: 6 }}>{error}</div>}
+    </Field>
+  );
+}
+function CvDisplay({ cvFile }) {
+  if (!cvFile) return null;
+  return (
+    <a href={cvFile.dataUrl} download={cvFile.name} style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 10, fontSize: 13, color: "var(--floodlight)" }}>
+      <Download size={13} /> {cvFile.name}
+    </a>
+  );
+}
+
+// Multi-select position picker, constrained to the chosen sport's real
+// position list (rather than free text) - toggled like tag chips.
+function PositionMultiSelect({ sport, selected, onChange }) {
+  const options = POSITIONS_BY_SPORT[sport] || [];
+  const sel = Array.isArray(selected) ? selected : (selected ? selected.split(",").map((s) => s.trim()).filter(Boolean) : []);
+  const toggle = (pos) => onChange(sel.includes(pos) ? sel.filter((p) => p !== pos) : [...sel, pos]);
+  if (!sport) return <div style={{ fontSize: 12, color: "var(--line-grey)", marginBottom: 14 }}>Select a sport first to choose positions.</div>;
+  return (
+    <Field label="Position(s)">
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {options.map((pos) => (
+          <button key={pos} onClick={() => toggle(pos)} type="button" style={{
+            background: sel.includes(pos) ? "var(--floodlight)" : "var(--turf-900)",
+            color: sel.includes(pos) ? "var(--turf-900)" : "var(--chalk)",
+            border: "1px solid var(--turf-500)", borderRadius: 20, padding: "5px 12px", fontSize: 12.5, cursor: "pointer",
+          }}>{pos}</button>
+        ))}
+      </div>
+    </Field>
+  );
+}
+
 // ---------- Login / Register ----------
 function AuthScreen({ onAuthed, errorBanner }) {
   const [mode, setMode] = useState("login");
@@ -244,27 +463,36 @@ function AuthScreen({ onAuthed, errorBanner }) {
 function ProfileSetup({ onCreated }) {
   const [step, setStep] = useState(0);
   const [type, setType] = useState(null);
-  const [form, setForm] = useState({ name: "", position: "", jerseyNumber: "", location: "", level: "club", sport: "" });
+  const [form, setForm] = useState({
+    name: "", avatarUrl: null, coverUrl: null, country: "", suburb: "",
+    contactEmail: "", contactPhone: "", socialLinks: {},
+    position: "", jerseyNumber: "", location: "", level: "club", sport: "",
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const priceFor = { player: 50, club: 250, supporter: 25, scout: 500, coach: 50 };
+  const needsSportStep = type === "player" || type === "club";
 
   const create = async () => {
     if (!form.name.trim()) return;
     setBusy(true);
     setError(null);
+    const general = {
+      avatarUrl: form.avatarUrl, coverUrl: form.coverUrl, country: form.country, suburb: form.suburb,
+      contactEmail: form.contactEmail, contactPhone: form.contactPhone, socialLinks: form.socialLinks,
+    };
     const profile = {
-      type, name: form.name.trim(),
+      type, name: form.name.trim(), ...general,
       ...(type === "player" ? {
         position: form.position, jerseyNumber: form.jerseyNumber, bio: "", weight: "", height: "", age: "", hobbies: "",
         positions: form.position, career: [], sport: form.sport || "", stats: { gamesPlayed: 0, tries: 0, conversions: 0, playerOfMatch: 0 },
         achievements: [], clubId: null, pendingClubId: null, openToOffers: false, currentContract: "", askingSalary: "",
-        region: "", attributes: [], avatarUrl: null, gallery: [],
+        region: "", attributes: [], gallery: [], cvFile: null,
       } : {}),
-      ...(type === "club" ? { location: form.location, level: form.level, sport: form.sport || "", roster: [], pending: [], founded: "", trophies: [], currentLog: "", coachRoster: [], coachPending: [], avatarUrl: null, gallery: [] } : {}),
-      ...(type === "supporter" ? { bio: "", career: "", supportedClubIds: [], avatarUrl: null } : {}),
-      ...(type === "scout" ? { bio: "", achievements: "", avatarUrl: null } : {}),
-      ...(type === "coach" ? { bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], teamId: null, pendingTeamId: null, avatarUrl: null } : {}),
+      ...(type === "club" ? { location: form.location, level: form.level, sport: form.sport || "", roster: [], pending: [], founded: "", trophies: [], currentLog: "", history: "", sponsors: [], coachRoster: [], coachPending: [], gallery: [] } : {}),
+      ...(type === "supporter" ? { bio: "", career: "", supportedClubIds: [] } : {}),
+      ...(type === "scout" ? { bio: "", achievements: "" } : {}),
+      ...(type === "coach" ? { bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], teamId: null, pendingTeamId: null } : {}),
     };
     try {
       const created = await api.createProfile(profile);
@@ -277,7 +505,7 @@ function ProfileSetup({ onCreated }) {
     <div style={{ maxWidth: 440, margin: "40px auto", padding: "0 16px" }}>
       <div style={{ textAlign: "center", marginBottom: 28 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, color: "var(--chalk)" }}>Set up your profile</div>
-        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>One more step before you're on Pitchside.</div>
+        <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 4 }}>Step {step + 1} of {needsSportStep ? 3 : 2}</div>
       </div>
 
       {step === 0 && (
@@ -307,28 +535,48 @@ function ProfileSetup({ onCreated }) {
       {step === 1 && (
         <TeamSheetCard>
           <button onClick={() => setStep(0)} style={{ background: "none", border: "none", color: "var(--line-grey)", display: "flex", alignItems: "center", gap: 4, marginBottom: 12, cursor: "pointer", padding: 0, fontSize: 13 }}><ChevronLeft size={14} /> Back</button>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>
-            {type === "player" && "Set up your player profile"}
-            {type === "club" && "Set up your team"}
-            {type === "supporter" && "Set up your supporter profile"}
-            {type === "scout" && "Set up your scout / agent profile"}
-            {type === "coach" && "Set up your coach profile"}
-          </div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, marginBottom: 4 }}>Tell us about you</div>
+          <div style={{ fontSize: 12, color: "var(--line-grey)", marginBottom: 14 }}>These general details apply no matter what kind of profile this is.</div>
+
+          <CoverEditor url={form.coverUrl} onChange={(coverUrl) => setForm({ ...form, coverUrl })} />
+          <AvatarEditor url={form.avatarUrl} onChange={(avatarUrl) => setForm({ ...form, avatarUrl })} fallbackIcon={TYPE_META[type]?.icon || User} fallbackColor={TYPE_META[type]?.color} />
+
           <Field label={type === "club" ? "Team name" : "Full name"}>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={type === "club" ? "Riverside FC" : "Alex Morgan"} />
           </Field>
+
+          <LocationFields country={form.country} suburb={form.suburb} onCountryChange={(v) => setForm({ ...form, country: v })} onSuburbChange={(v) => setForm({ ...form, suburb: v })} />
+          <ContactFieldsEditor email={form.contactEmail} phone={form.contactPhone} onEmailChange={(v) => setForm({ ...form, contactEmail: v })} onPhoneChange={(v) => setForm({ ...form, contactPhone: v })} />
+          <SocialLinksEditor links={form.socialLinks} onChange={(socialLinks) => setForm({ ...form, socialLinks })} />
+
+          {error && <div style={{ color: "var(--score)", fontSize: 13, marginBottom: 10 }}>{error}</div>}
+          {needsSportStep ? (
+            <Btn onClick={() => setStep(2)} disabled={!form.name.trim()} style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>Continue</Btn>
+          ) : (
+            <>
+              <Btn onClick={create} disabled={!form.name.trim() || busy} style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>{busy ? <Loader2 size={15} className="spin" /> : <Check size={15} />} Create profile</Btn>
+              <div style={{ fontSize: 11, color: "var(--line-grey)", marginTop: 10, textAlign: "center" }}>30-day free trial, then R{priceFor[type]}/month.</div>
+            </>
+          )}
+        </TeamSheetCard>
+      )}
+
+      {step === 2 && needsSportStep && (
+        <TeamSheetCard>
+          <button onClick={() => setStep(1)} style={{ background: "none", border: "none", color: "var(--line-grey)", display: "flex", alignItems: "center", gap: 4, marginBottom: 12, cursor: "pointer", padding: 0, fontSize: 13 }}><ChevronLeft size={14} /> Back</button>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, marginBottom: 14 }}>
+            {type === "player" ? "Your sport" : "Your team's sport"}
+          </div>
           {type === "player" && (
             <>
               <Field label="Sport">
-                <select style={inputStyle} value={form.sport} onChange={(e) => setForm({ ...form, sport: e.target.value })}>
+                <select style={inputStyle} value={form.sport} onChange={(e) => setForm({ ...form, sport: e.target.value, position: "" })}>
                   <option value="">Select a sport</option>
                   {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </Field>
-              <div style={{ display: "flex", gap: 10 }}>
-                <div style={{ flex: 2 }}><Field label="Position(s)"><input style={inputStyle} value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} placeholder="e.g. Midfielder, Wing Attack" /></Field></div>
-                <div style={{ flex: 1 }}><Field label="Squad no."><input style={inputStyle} type="number" value={form.jerseyNumber} onChange={(e) => setForm({ ...form, jerseyNumber: e.target.value })} placeholder="8" /></Field></div>
-              </div>
+              <PositionMultiSelect sport={form.sport} selected={form.position} onChange={(arr) => setForm({ ...form, position: arr.join(", ") })} />
+              <Field label="Squad no."><input style={inputStyle} type="number" value={form.jerseyNumber} onChange={(e) => setForm({ ...form, jerseyNumber: e.target.value })} placeholder="8" /></Field>
             </>
           )}
           {type === "club" && (
@@ -339,16 +587,15 @@ function ProfileSetup({ onCreated }) {
                   {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </Field>
-              <div style={{ display: "flex", gap: 10 }}>
-                <div style={{ flex: 1 }}><Field label="Location"><input style={inputStyle} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Johannesburg" /></Field></div>
-                <div style={{ flex: 1 }}>
-                  <Field label="Level">
-                    <select style={inputStyle} value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })}>
-                      <option value="school">School</option><option value="club">Club</option><option value="pro">Professional</option>
-                    </select>
-                  </Field>
-                </div>
-              </div>
+              <Field label="Category">
+                <select style={inputStyle} value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })}>
+                  <option value="school">School</option>
+                  <option value="club">Club</option>
+                  <option value="pro">Professional</option>
+                  <option value="social">Social</option>
+                  <option value="action">Action sport</option>
+                </select>
+              </Field>
             </>
           )}
           {error && <div style={{ color: "var(--score)", fontSize: 13, marginBottom: 10 }}>{error}</div>}
@@ -425,7 +672,18 @@ function LiveMatchCard({ match, viewerType, onSubmitScore, onEnd, busy }) {
   );
 }
 
-// ---------- Player view ----------
+function SponsorLogoPicker({ onPick }) {
+  const fileRef = useRef(null);
+  const handleFile = (e) => { const f = e.target.files[0]; if (f) onPick(f); e.target.value = ""; };
+  return (
+    <>
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+      <Btn onClick={() => fileRef.current.click()}><ImagePlus size={14} /></Btn>
+    </>
+  );
+}
+
+
 function PlayerView({ profile, refresh, clubs }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(profile);
@@ -437,7 +695,7 @@ function PlayerView({ profile, refresh, clubs }) {
   const [grants, setGrants] = useState([]);
   const [chatWith, setChatWith] = useState(null);
 
-  useEffect(() => setDraft({ region: "", attributes: [], sport: "", avatarUrl: null, gallery: [], ...profile }), [profile.id]);
+  useEffect(() => setDraft({ region: "", attributes: [], sport: "", avatarUrl: null, coverUrl: null, gallery: [], country: "", suburb: "", contactEmail: "", contactPhone: "", socialLinks: {}, cvFile: null, ...profile }), [profile.id]);
   const loadGrants = useCallback(async () => { try { setGrants(await api.listMyAccessRequests()); } catch {} }, []);
   useEffect(() => { loadGrants(); }, [loadGrants]);
 
@@ -473,11 +731,13 @@ function PlayerView({ profile, refresh, clubs }) {
     <div>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
+        <CoverPhoto url={profile.coverUrl} />
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
           <Avatar url={profile.avatarUrl} size={52} fallbackIcon={User} fallbackColor="var(--floodlight)" />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
             <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.positions || profile.position || "Position not set"} {profile.jerseyNumber && `\u00b7 #${profile.jerseyNumber}`}</div>
+            {formatLocation(profile) && <div style={{ color: "var(--line-grey)", fontSize: 12, marginTop: 2 }}><LocationDisplay country={profile.country} suburb={profile.suburb} /></div>}
             <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {myClub ? <Pill tone="amber">{myClub.name}</Pill> : pendingClub ? <Pill>Request sent \u00b7 {pendingClub.name}</Pill> : <Pill>Unattached</Pill>}
               {profile.sport && <Pill>{profile.sport}</Pill>}
@@ -489,6 +749,7 @@ function PlayerView({ profile, refresh, clubs }) {
 
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <CoverEditor url={draft.coverUrl} onChange={(coverUrl) => setDraft({ ...draft, coverUrl })} />
             <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={User} fallbackColor="var(--floodlight)" />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <div style={{ display: "flex", gap: 10 }}>
@@ -502,9 +763,12 @@ function PlayerView({ profile, refresh, clubs }) {
                 {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
-            <Field label="Position(s)"><input style={inputStyle} value={draft.positions} onChange={(e) => setDraft({ ...draft, positions: e.target.value })} placeholder="Fly-half, Centre" /></Field>
+            <PositionMultiSelect sport={draft.sport} selected={draft.positions} onChange={(arr) => setDraft({ ...draft, positions: arr.join(", ") })} />
             <Field label="Hobbies"><input style={inputStyle} value={draft.hobbies} onChange={(e) => setDraft({ ...draft, hobbies: e.target.value })} placeholder="Fishing, gym" /></Field>
-            <Field label="Region"><input style={inputStyle} value={draft.region} onChange={(e) => setDraft({ ...draft, region: e.target.value })} placeholder="Gauteng, South Africa" /></Field>
+            <LocationFields country={draft.country} suburb={draft.suburb} onCountryChange={(v) => setDraft({ ...draft, country: v })} onSuburbChange={(v) => setDraft({ ...draft, suburb: v })} />
+            <ContactFieldsEditor email={draft.contactEmail} phone={draft.contactPhone} onEmailChange={(v) => setDraft({ ...draft, contactEmail: v })} onPhoneChange={(v) => setDraft({ ...draft, contactPhone: v })} />
+            <SocialLinksEditor links={draft.socialLinks} onChange={(socialLinks) => setDraft({ ...draft, socialLinks })} />
+            <CvUploadEditor cvFile={draft.cvFile} onChange={(cvFile) => setDraft({ ...draft, cvFile })} />
 
             <Field label="Attributes (things scouts might search for)">
               <div style={{ display: "flex", gap: 8 }}>
@@ -577,8 +841,9 @@ function PlayerView({ profile, refresh, clubs }) {
               {profile.height && <span>{profile.height}</span>}
               {profile.age && <span>{profile.age} yrs</span>}
               {profile.hobbies && <span>Hobbies: {profile.hobbies}</span>}
-              {profile.region && <span>Based in {profile.region}</span>}
             </div>
+            <ContactFieldsDisplay email={profile.contactEmail} phone={profile.contactPhone} />
+            <SocialLinksDisplay links={profile.socialLinks} />
             <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14, flexWrap: "wrap" }}>
               {statLabelsFor(profile.sport).map(([key, label]) => (
                 <div key={key}><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{profile.stats[key]}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>{label}</div></div>
@@ -601,6 +866,7 @@ function PlayerView({ profile, refresh, clubs }) {
               </div>
             )}
             <GalleryDisplay photos={profile.gallery} />
+            <CvDisplay cvFile={profile.cvFile} />
           </>
         )}
       </TeamSheetCard>
@@ -616,7 +882,7 @@ function PlayerView({ profile, refresh, clubs }) {
               {clubs.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13 }}>No teams on Pitchside yet.</div>}
               {clubs.map((c) => (
                 <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderTop: "1px solid var(--turf-500)" }}>
-                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.location} \u00b7 {c.level}</div></div>
+                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{formatLocation(c)} \u00b7 {c.level}</div></div>
                   <Btn onClick={() => requestJoin(c.id)} disabled={busy}>Request</Btn>
                 </div>
               ))}
@@ -666,16 +932,27 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
   const [tab, setTab] = useState("roster");
   const [lineupName, setLineupName] = useState("");
   const [opponent, setOpponent] = useState("");
-  const [selected, setSelected] = useState([]);
+  const [lineupSlots, setLineupSlots] = useState({});
   const [newsText, setNewsText] = useState("");
   const [posting, setPosting] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [bioDraft, setBioDraft] = useState({ founded: profile.founded || "", currentLog: profile.currentLog || "", sport: profile.sport || "", avatarUrl: profile.avatarUrl || null, gallery: profile.gallery || [] });
+  const [bioDraft, setBioDraft] = useState({
+    founded: profile.founded || "", currentLog: profile.currentLog || "", sport: profile.sport || "",
+    avatarUrl: profile.avatarUrl || null, coverUrl: profile.coverUrl || null, gallery: profile.gallery || [],
+    level: profile.level || "club", history: profile.history || "", sponsors: profile.sponsors || [],
+    country: profile.country || "", suburb: profile.suburb || "", contactEmail: profile.contactEmail || "",
+    contactPhone: profile.contactPhone || "", socialLinks: profile.socialLinks || {},
+  });
   const [trophyInput, setTrophyInput] = useState("");
   const [trophies, setTrophies] = useState(profile.trophies || []);
+  const [sponsorName, setSponsorName] = useState("");
   const [savingBio, setSavingBio] = useState(false);
   const [liveMatch, setLiveMatch] = useState(null);
   const [matchOpponent, setMatchOpponent] = useState("");
+  const [events, setEvents] = useState([]);
+  const [eventForm, setEventForm] = useState({ league: "", matchTitle: "", opponent: "", datetime: "", location: "" });
+  const [eventBusy, setEventBusy] = useState(false);
+  const [lastLineupPost, setLastLineupPost] = useState(null);
 
   const rosterPlayers = profile.roster.map((id) => allProfiles.find((p) => p.id === id)).filter(Boolean);
   const pendingPlayers = profile.pending.map((id) => allProfiles.find((p) => p.id === id)).filter(Boolean);
@@ -686,6 +963,11 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
     try { const all = await api.listLiveMatches("live"); setLiveMatch(all.find((m) => m.clubId === profile.id) || null); } catch {}
   }, [profile.id]);
   useEffect(() => { loadLive(); }, [loadLive]);
+
+  const loadEvents = useCallback(async () => {
+    try { setEvents(await api.listEvents(profile.id)); } catch {}
+  }, [profile.id]);
+  useEffect(() => { loadEvents(); }, [loadEvents]);
 
   const respond = async (playerId, accept) => {
     setBusy(true);
@@ -700,16 +982,33 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
     setBusy(false);
   };
 
-  const toggleSelect = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const setSlot = (slot, playerId) => setLineupSlots((s) => ({ ...s, [slot]: playerId }));
+  const filledSlots = Object.values(lineupSlots).filter(Boolean);
 
   const postLineup = async () => {
     setPosting(true);
-    const lineup = selected.map((id) => { const p = rosterPlayers.find((r) => r.id === id); return { id, name: p.name, number: p.jerseyNumber, position: p.positions || p.position }; });
+    const lineup = Object.entries(lineupSlots).filter(([, id]) => id).map(([slot, id]) => {
+      const p = rosterPlayers.find((r) => r.id === id);
+      return { id, name: p?.name, number: p?.jerseyNumber, position: slot };
+    });
     try {
       await onPost({ kind: "lineup", title: lineupName || "Matchday lineup", body: opponent ? `vs ${opponent}` : "", meta: { lineup } });
-      setLineupName(""); setOpponent(""); setSelected([]); setTab("roster");
+      setLastLineupPost({ title: lineupName || "Matchday lineup", opponent, lineup });
+      setLineupName(""); setOpponent(""); setLineupSlots({}); setTab("roster");
     } catch (e) { alert(e.message); }
     setPosting(false);
+  };
+
+  const shareLineup = async () => {
+    if (!lastLineupPost) return;
+    const text = `${profile.name} ${lastLineupPost.title}${lastLineupPost.opponent ? ` vs ${lastLineupPost.opponent}` : ""}\n\n` +
+      lastLineupPost.lineup.map((p) => `${p.position}: ${p.name}`).join("\n") + "\n\nvia Pitchside";
+    if (navigator.share) {
+      try { await navigator.share({ title: `${profile.name} lineup`, text }); } catch {}
+    } else {
+      try { await navigator.clipboard.writeText(text); alert("Lineup copied - paste it into Facebook, Instagram, or wherever you're posting."); }
+      catch { alert("Could not copy automatically - here's the lineup:\n\n" + text); }
+    }
   };
 
   const postNews = async () => {
@@ -727,6 +1026,12 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
     setSavingBio(false);
   };
 
+  const addSponsor = async (file) => {
+    const dataUrl = await resizeImage(file, 400, 0.8);
+    setBioDraft({ ...bioDraft, sponsors: [...(bioDraft.sponsors || []), { name: sponsorName || "Sponsor", logoUrl: dataUrl }] });
+    setSponsorName("");
+  };
+
   const startLiveMatch = async () => {
     setBusy(true);
     try { await api.createLiveMatch(matchOpponent); setMatchOpponent(""); await loadLive(); }
@@ -740,18 +1045,58 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
     setBusy(false);
   };
 
+  const createEvent = async () => {
+    if (!eventForm.matchTitle.trim()) return;
+    setEventBusy(true);
+    try { await api.createEvent(eventForm); setEventForm({ league: "", matchTitle: "", opponent: "", datetime: "", location: "" }); await loadEvents(); }
+    catch (e) { alert(e.message); }
+    setEventBusy(false);
+  };
+  const removeEvent = async (id) => {
+    setEventBusy(true);
+    try { await api.deleteEvent(id); await loadEvents(); }
+    catch (e) { alert(e.message); }
+    setEventBusy(false);
+  };
+
   const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
+
+  const CATEGORY_LABELS = { school: "School", club: "Club", pro: "Professional", social: "Social", action: "Action sport" };
 
   return (
     <div>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
+        <CoverPhoto url={profile.coverUrl} />
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
           <Avatar url={profile.avatarUrl} size={52} fallbackIcon={Shield} fallbackColor="var(--score)" />
-          <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><div style={{ color: "var(--line-grey)", fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span>{profile.location} \u00b7 {profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>{profile.sport && <Pill>{profile.sport}</Pill>}</div></div>
+          <div>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
+            <div style={{ color: "var(--line-grey)", fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <LocationDisplay country={profile.country} suburb={profile.suburb} />
+              <span>{CATEGORY_LABELS[profile.level] || profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>
+              {profile.sport && <Pill>{profile.sport}</Pill>}
+            </div>
+          </div>
         </div>
+        <ContactFieldsDisplay email={profile.contactEmail} phone={profile.contactPhone} />
+        <SocialLinksDisplay links={profile.socialLinks} />
+        {profile.history && <div style={{ marginTop: 12, fontSize: 13, color: "var(--chalk)" }}>{profile.history}</div>}
         {profile.trophies?.length > 0 && <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>{profile.trophies.map((t, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{t}</Pill>)}</div>}
         {profile.currentLog && <div style={{ marginTop: 10, fontSize: 13, color: "var(--chalk)", whiteSpace: "pre-wrap" }}>{profile.currentLog}</div>}
+        {profile.sponsors?.length > 0 && (
+          <div style={{ marginTop: 14, borderTop: "1px solid var(--turf-500)", paddingTop: 12 }}>
+            <div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Sponsors</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {profile.sponsors.map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--turf-900)", borderRadius: 6, padding: "5px 10px" }}>
+                  <img src={s.logoUrl} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "cover" }} />
+                  <span style={{ fontSize: 12 }}>{s.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <GalleryDisplay photos={profile.gallery} />
         <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
           <div><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{profile.roster.length}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>Squad</div></div>
@@ -762,7 +1107,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
       {liveMatch && <LiveMatchCard match={liveMatch} viewerType="club-owner" onEnd={endLiveMatch} busy={busy} />}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        {["roster", "lineup", "news", "live match", "team info"].map((t) => (
+        {["roster", "lineup", "fixtures", "news", "live match", "team info"].map((t) => (
           <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "var(--floodlight)" : "transparent", color: tab === t ? "var(--turf-900)" : "var(--chalk)", border: "1px solid var(--turf-500)", borderRadius: 20, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "capitalize" }}>
             {t}{t === "roster" && profile.pending.length > 0 ? ` (${profile.pending.length})` : ""}
           </button>
@@ -821,16 +1166,69 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
             <Field label="Match title"><input style={inputStyle} value={lineupName} onChange={(e) => setLineupName(e.target.value)} placeholder="League Round 12" /></Field>
             <Field label="Opponent"><input style={inputStyle} value={opponent} onChange={(e) => setOpponent(e.target.value)} placeholder="Northside United" /></Field>
           </div>
-          <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", margin: "10px 0 8px" }}>Select starting lineup ({selected.length})</div>
+          <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", margin: "10px 0 8px" }}>Starting lineup ({filledSlots.length}/{lineupSlotsFor(profile.sport).length})</div>
           {rosterPlayers.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>Add players to your squad first.</div>}
-          {rosterPlayers.map((p) => (
-            <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: "1px solid var(--turf-500)", cursor: "pointer" }}>
-              <input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggleSelect(p.id)} />
-              <JerseyBadge number={p.jerseyNumber} size={28} />
-              <div style={{ fontSize: 14 }}>{p.name} <span style={{ color: "var(--line-grey)" }}>\u00b7 {p.positions || p.position}</span></div>
-            </label>
-          ))}
-          <Btn onClick={postLineup} disabled={selected.length === 0 || posting} style={{ marginTop: 14 }}>{posting ? <Loader2 size={14} className="spin" /> : <Newspaper size={14} />} Publish lineup</Btn>
+          {rosterPlayers.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+              {lineupSlotsFor(profile.sport).map((slot) => {
+                const slotPositionWord = slot.replace(/^\d+\.\s*/, "");
+                const sorted = [...rosterPlayers].sort((a, b) => {
+                  const aMatch = (a.positions || a.position || "").includes(slotPositionWord) ? 0 : 1;
+                  const bMatch = (b.positions || b.position || "").includes(slotPositionWord) ? 0 : 1;
+                  return aMatch - bMatch;
+                });
+                return (
+                  <div key={slot} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 100, fontSize: 12, color: "var(--line-grey)", flexShrink: 0 }}>{slot}</div>
+                    <select style={inputStyle} value={lineupSlots[slot] || ""} onChange={(e) => setSlot(slot, e.target.value || null)}>
+                      <option value="">Not selected</option>
+                      {sorted.map((p) => <option key={p.id} value={p.id}>{p.name}{p.jerseyNumber ? ` (#${p.jerseyNumber})` : ""}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <Btn onClick={postLineup} disabled={filledSlots.length === 0 || posting} style={{ marginTop: 4 }}>{posting ? <Loader2 size={14} className="spin" /> : <Newspaper size={14} />} Publish lineup</Btn>
+          {lastLineupPost && (
+            <Btn variant="ghost" onClick={shareLineup} style={{ marginTop: 8, marginLeft: 8 }}><Share2 size={14} /> Share lineup</Btn>
+          )}
+          <div style={{ fontSize: 11, color: "var(--line-grey)", marginTop: 10 }}>
+            "Share" opens your device's share sheet (or copies the lineup as text) so you can post it to Facebook, Instagram, or anywhere else yourself - Pitchside can't post to those platforms automatically without your own developer accounts connected there.
+          </div>
+        </TeamSheetCard>
+      )}
+
+      {tab === "fixtures" && (
+        <TeamSheetCard>
+          <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 10 }}>Add an upcoming fixture</div>
+          <Field label="League / competition"><input style={inputStyle} value={eventForm.league} onChange={(e) => setEventForm({ ...eventForm, league: e.target.value })} placeholder="Premier League" /></Field>
+          <Field label="Match title"><input style={inputStyle} value={eventForm.matchTitle} onChange={(e) => setEventForm({ ...eventForm, matchTitle: e.target.value })} placeholder="Round 14" /></Field>
+          <Field label="Opponent"><input style={inputStyle} value={eventForm.opponent} onChange={(e) => setEventForm({ ...eventForm, opponent: e.target.value })} placeholder="Northside United" /></Field>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Field label="Date & time"><input style={inputStyle} type="datetime-local" value={eventForm.datetime} onChange={(e) => setEventForm({ ...eventForm, datetime: e.target.value })} /></Field>
+            <Field label="Location"><input style={inputStyle} value={eventForm.location} onChange={(e) => setEventForm({ ...eventForm, location: e.target.value })} placeholder="Home ground" /></Field>
+          </div>
+          <Btn onClick={createEvent} disabled={!eventForm.matchTitle.trim() || eventBusy}>{eventBusy ? <Loader2 size={14} className="spin" /> : <Calendar size={14} />} Add fixture</Btn>
+
+          {events.length > 0 && (
+            <div style={{ marginTop: 20, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+              <div style={{ fontSize: 12, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 10 }}>Upcoming</div>
+              {events.map((ev) => (
+                <div key={ev.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 0", borderTop: "1px solid var(--turf-500)" }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{ev.matchTitle}{ev.opponent && ` vs ${ev.opponent}`}</div>
+                    <div style={{ fontSize: 12, color: "var(--line-grey)" }}>
+                      {ev.league && `${ev.league} \u00b7 `}
+                      {ev.datetime && new Date(ev.datetime).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                      {ev.location && ` \u00b7 ${ev.location}`}
+                    </div>
+                  </div>
+                  <button onClick={() => removeEvent(ev.id)} style={{ background: "none", border: "none", color: "var(--line-grey)", cursor: "pointer" }}><X size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
         </TeamSheetCard>
       )}
 
@@ -857,6 +1255,7 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 
       {tab === "team info" && (
         <TeamSheetCard>
+          <CoverEditor url={bioDraft.coverUrl} onChange={(coverUrl) => setBioDraft({ ...bioDraft, coverUrl })} />
           <AvatarEditor url={bioDraft.avatarUrl} onChange={(url) => setBioDraft({ ...bioDraft, avatarUrl: url })} fallbackIcon={Shield} fallbackColor="var(--score)" />
           <Field label="Sport">
             <select style={inputStyle} value={bioDraft.sport} onChange={(e) => setBioDraft({ ...bioDraft, sport: e.target.value })}>
@@ -864,7 +1263,16 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
               {SPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </Field>
+          <Field label="Category">
+            <select style={inputStyle} value={bioDraft.level} onChange={(e) => setBioDraft({ ...bioDraft, level: e.target.value })}>
+              {Object.entries(CATEGORY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </Field>
+          <LocationFields country={bioDraft.country} suburb={bioDraft.suburb} onCountryChange={(v) => setBioDraft({ ...bioDraft, country: v })} onSuburbChange={(v) => setBioDraft({ ...bioDraft, suburb: v })} />
+          <ContactFieldsEditor email={bioDraft.contactEmail} phone={bioDraft.contactPhone} onEmailChange={(v) => setBioDraft({ ...bioDraft, contactEmail: v })} onPhoneChange={(v) => setBioDraft({ ...bioDraft, contactPhone: v })} />
+          <SocialLinksEditor links={bioDraft.socialLinks} onChange={(socialLinks) => setBioDraft({ ...bioDraft, socialLinks })} />
           <Field label="Founded"><input style={inputStyle} value={bioDraft.founded} onChange={(e) => setBioDraft({ ...bioDraft, founded: e.target.value })} placeholder="1998" /></Field>
+          <Field label="Club history & bio"><textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={bioDraft.history} onChange={(e) => setBioDraft({ ...bioDraft, history: e.target.value })} placeholder="Founded in 1998, Riverside FC has..." /></Field>
           <Field label="Current log / standing"><textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={bioDraft.currentLog} onChange={(e) => setBioDraft({ ...bioDraft, currentLog: e.target.value })} placeholder={"1. Riverside FC - 24pts\n2. Northside United - 21pts"} /></Field>
           <Field label="Add a trophy">
             <div style={{ display: "flex", gap: 8 }}>
@@ -873,6 +1281,25 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
             </div>
           </Field>
           {trophies.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>{trophies.map((t, i) => <Pill key={i} tone="amber">{t} <X size={11} style={{ marginLeft: 5, cursor: "pointer", verticalAlign: -1 }} onClick={() => setTrophies(trophies.filter((_, idx) => idx !== i))} /></Pill>)}</div>}
+
+          <Field label="Sponsors">
+            {bioDraft.sponsors?.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                {bioDraft.sponsors.map((s, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--turf-900)", borderRadius: 6, padding: "5px 10px" }}>
+                    <img src={s.logoUrl} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover" }} />
+                    <span style={{ fontSize: 12 }}>{s.name}</span>
+                    <X size={11} style={{ cursor: "pointer" }} onClick={() => setBioDraft({ ...bioDraft, sponsors: bioDraft.sponsors.filter((_, idx) => idx !== i) })} />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={inputStyle} value={sponsorName} onChange={(e) => setSponsorName(e.target.value)} placeholder="Sponsor name" />
+              <SponsorLogoPicker onPick={addSponsor} />
+            </div>
+          </Field>
+
           <GalleryEditor photos={bioDraft.gallery || []} onChange={(gallery) => setBioDraft({ ...bioDraft, gallery })} />
           <Btn onClick={saveBio} disabled={savingBio}>{savingBio ? <Loader2 size={14} className="spin" /> : "Save team info"}</Btn>
         </TeamSheetCard>
@@ -884,12 +1311,12 @@ function ClubView({ profile, refresh, allProfiles, onPost }) {
 // ---------- Coach view ----------
 function CoachView({ profile, refresh, clubs }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], avatarUrl: null, ...profile });
+  const [draft, setDraft] = useState({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], avatarUrl: null, coverUrl: null, country: "", suburb: "", contactEmail: "", contactPhone: "", socialLinks: {}, ...profile });
   const [achInput, setAchInput] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => setDraft({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], avatarUrl: null, ...profile }), [profile.id]);
+  useEffect(() => setDraft({ bio: "", qualifications: "", yearsExperience: "", specialization: "", achievements: [], avatarUrl: null, coverUrl: null, country: "", suburb: "", contactEmail: "", contactPhone: "", socialLinks: {}, ...profile }), [profile.id]);
 
   const save = async () => {
     setBusy(true);
@@ -914,11 +1341,13 @@ function CoachView({ profile, refresh, clubs }) {
     <div>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
+        <CoverPhoto url={profile.coverUrl} />
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
           <Avatar url={profile.avatarUrl} size={52} fallbackIcon={ClipboardList} fallbackColor="#6FBFAE" />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
             <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{profile.specialization || "Specialization not set"}</div>
+            {(profile.country || profile.suburb) && <div style={{ color: "var(--line-grey)", fontSize: 12, marginTop: 2 }}><LocationDisplay country={profile.country} suburb={profile.suburb} /></div>}
             <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {myTeam ? <Pill tone="amber">{myTeam.name}</Pill> : pendingTeam ? <Pill>Request sent \u00b7 {pendingTeam.name}</Pill> : <Pill>Unattached</Pill>}
             </div>
@@ -928,6 +1357,7 @@ function CoachView({ profile, refresh, clubs }) {
 
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <CoverEditor url={draft.coverUrl} onChange={(coverUrl) => setDraft({ ...draft, coverUrl })} />
             <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={ClipboardList} fallbackColor="#6FBFAE" />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <Field label="Qualifications"><input style={inputStyle} value={draft.qualifications} onChange={(e) => setDraft({ ...draft, qualifications: e.target.value })} placeholder="UEFA A License, Level 3 Rugby Coaching" /></Field>
@@ -935,6 +1365,9 @@ function CoachView({ profile, refresh, clubs }) {
               <Field label="Years of experience"><input style={inputStyle} value={draft.yearsExperience} onChange={(e) => setDraft({ ...draft, yearsExperience: e.target.value })} placeholder="8" /></Field>
               <Field label="Specialization"><input style={inputStyle} value={draft.specialization} onChange={(e) => setDraft({ ...draft, specialization: e.target.value })} placeholder="Attack, set-pieces, fitness" /></Field>
             </div>
+            <LocationFields country={draft.country} suburb={draft.suburb} onCountryChange={(v) => setDraft({ ...draft, country: v })} onSuburbChange={(v) => setDraft({ ...draft, suburb: v })} />
+            <ContactFieldsEditor email={draft.contactEmail} phone={draft.contactPhone} onEmailChange={(v) => setDraft({ ...draft, contactEmail: v })} onPhoneChange={(v) => setDraft({ ...draft, contactPhone: v })} />
+            <SocialLinksEditor links={draft.socialLinks} onChange={(socialLinks) => setDraft({ ...draft, socialLinks })} />
             <Field label="Add achievement">
               <div style={{ display: "flex", gap: 8 }}>
                 <input style={inputStyle} value={achInput} onChange={(e) => setAchInput(e.target.value)} placeholder="Promoted club to Division 1, 2024" />
@@ -955,6 +1388,8 @@ function CoachView({ profile, refresh, clubs }) {
               {profile.qualifications && <span>{profile.qualifications}</span>}
               {profile.yearsExperience && <span>{profile.yearsExperience} yrs experience</span>}
             </div>
+            <ContactFieldsDisplay email={profile.contactEmail} phone={profile.contactPhone} />
+            <SocialLinksDisplay links={profile.socialLinks} />
             {profile.achievements?.length > 0 && (
               <div style={{ marginTop: 14, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {profile.achievements.map((a, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{a}</Pill>)}
@@ -975,7 +1410,7 @@ function CoachView({ profile, refresh, clubs }) {
               {clubs.length === 0 && <div style={{ color: "var(--line-grey)", fontSize: 13 }}>No teams on Pitchside yet.</div>}
               {clubs.map((c) => (
                 <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderTop: "1px solid var(--turf-500)" }}>
-                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{c.location} \u00b7 {c.level}</div></div>
+                  <div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div><div style={{ fontSize: 12, color: "var(--line-grey)" }}>{formatLocation(c)} \u00b7 {c.level}</div></div>
                   <Btn onClick={() => requestJoin(c.id)} disabled={busy}>Request</Btn>
                 </div>
               ))}
@@ -995,8 +1430,9 @@ function CoachView({ profile, refresh, clubs }) {
 // ---------- Supporter view ----------
 function SupporterProfileCard({ profile, refresh, clubs }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ bio: profile.bio || "", career: profile.career || "", supportedClubIds: profile.supportedClubIds || [], avatarUrl: profile.avatarUrl || null });
+  const [draft, setDraft] = useState({ bio: profile.bio || "", career: profile.career || "", supportedClubIds: profile.supportedClubIds || [], avatarUrl: profile.avatarUrl || null, coverUrl: profile.coverUrl || null, country: profile.country || "", suburb: profile.suburb || "", contactEmail: profile.contactEmail || "", contactPhone: profile.contactPhone || "", socialLinks: profile.socialLinks || {} });
   const [busy, setBusy] = useState(false);
+  const [teamQuery, setTeamQuery] = useState("");
 
   const toggleClub = (id) => setDraft((d) => ({ ...d, supportedClubIds: d.supportedClubIds.includes(id) ? d.supportedClubIds.filter((x) => x !== id) : [...d.supportedClubIds, id] }));
 
@@ -1008,15 +1444,19 @@ function SupporterProfileCard({ profile, refresh, clubs }) {
   };
   const upgrade = async () => { setBusy(true); try { await api.upgradeMyProfile(); await refresh(); } catch (e) { alert(e.message); } setBusy(false); };
 
+  const filteredClubs = teamQuery.trim() ? clubs.filter((c) => c.name.toLowerCase().includes(teamQuery.toLowerCase())) : clubs;
+
   return (
     <>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
+        <CoverPhoto url={profile.coverUrl} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
             <Avatar url={profile.avatarUrl} size={52} fallbackIcon={Users} />
             <div>
               <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
+              {(profile.country || profile.suburb) && <div style={{ color: "var(--line-grey)", fontSize: 12, marginTop: 2 }}><LocationDisplay country={profile.country} suburb={profile.suburb} /></div>}
               <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {(profile.supportedClubIds || []).map((id) => { const c = clubs.find((x) => x.id === id); return c ? <Pill key={id} tone="amber">{c.name}</Pill> : null; })}
                 {(!profile.supportedClubIds || profile.supportedClubIds.length === 0) && <Pill>Not following a team yet</Pill>}
@@ -1027,14 +1467,22 @@ function SupporterProfileCard({ profile, refresh, clubs }) {
         </div>
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <CoverEditor url={draft.coverUrl} onChange={(coverUrl) => setDraft({ ...draft, coverUrl })} />
             <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={Users} />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
             <Field label="Your supporter story"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.career} onChange={(e) => setDraft({ ...draft, career: e.target.value })} placeholder="Been following Riverside since 2015..." /></Field>
-            <Field label="Teams you support">
-              {clubs.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No teams on Pitchside yet.</div>}
-              {clubs.map((c) => (
+            <LocationFields country={draft.country} suburb={draft.suburb} onCountryChange={(v) => setDraft({ ...draft, country: v })} onSuburbChange={(v) => setDraft({ ...draft, suburb: v })} />
+            <ContactFieldsEditor email={draft.contactEmail} phone={draft.contactPhone} onEmailChange={(v) => setDraft({ ...draft, contactEmail: v })} onPhoneChange={(v) => setDraft({ ...draft, contactPhone: v })} />
+            <SocialLinksEditor links={draft.socialLinks} onChange={(socialLinks) => setDraft({ ...draft, socialLinks })} />
+            <Field label="Search & follow teams">
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, background: "var(--turf-900)", border: "1px solid var(--turf-500)", borderRadius: 6, padding: "6px 10px" }}>
+                <Search size={14} color="var(--line-grey)" />
+                <input style={{ ...inputStyle, border: "none", padding: 0, background: "transparent" }} value={teamQuery} onChange={(e) => setTeamQuery(e.target.value)} placeholder="Search teams by name" />
+              </div>
+              {filteredClubs.length === 0 && <div style={{ fontSize: 13, color: "var(--line-grey)" }}>No teams found.</div>}
+              {filteredClubs.map((c) => (
                 <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0" }}>
-                  <input type="checkbox" checked={draft.supportedClubIds.includes(c.id)} onChange={() => toggleClub(c.id)} /> {c.name}
+                  <input type="checkbox" checked={draft.supportedClubIds.includes(c.id)} onChange={() => toggleClub(c.id)} /> {c.name} <span style={{ color: "var(--line-grey)" }}>{formatLocation(c) && `\u00b7 ${formatLocation(c)}`}</span>
                 </label>
               ))}
             </Field>
@@ -1044,6 +1492,8 @@ function SupporterProfileCard({ profile, refresh, clubs }) {
           <>
             {profile.bio && <div style={{ marginTop: 14, fontSize: 14 }}>{profile.bio}</div>}
             {profile.career && <div style={{ marginTop: 8, fontSize: 13, color: "var(--line-grey)" }}>{profile.career}</div>}
+            <ContactFieldsDisplay email={profile.contactEmail} phone={profile.contactPhone} />
+            <SocialLinksDisplay links={profile.socialLinks} />
           </>
         )}
       </TeamSheetCard>
@@ -1090,7 +1540,7 @@ function SupporterUpload({ profile, onPost }) {
 // ---------- Scout view ----------
 function ScoutView({ profile, refresh, allProfiles, onViewProfile }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ bio: profile.bio || "", achievements: profile.achievements || "", avatarUrl: profile.avatarUrl || null });
+  const [draft, setDraft] = useState({ bio: profile.bio || "", achievements: profile.achievements || "", avatarUrl: profile.avatarUrl || null, coverUrl: profile.coverUrl || null, country: profile.country || "", suburb: profile.suburb || "", contactEmail: profile.contactEmail || "", contactPhone: profile.contactPhone || "", socialLinks: profile.socialLinks || {} });
   const [busy, setBusy] = useState(false);
   const [grants, setGrants] = useState([]);
   const [query, setQuery] = useState("");
@@ -1136,23 +1586,34 @@ function ScoutView({ profile, refresh, allProfiles, onViewProfile }) {
     <div>
       <TrialBanner profile={profile} onUpgrade={upgrade} busy={busy} />
       <TeamSheetCard style={{ marginBottom: 16 }}>
+        <CoverPhoto url={profile.coverUrl} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
             <Avatar url={profile.avatarUrl} size={52} fallbackIcon={Briefcase} fallbackColor="#7FB8E0" />
-            <div><div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div><Pill tone="blue">{accepted.length} player{accepted.length === 1 ? "" : "s"} on profile</Pill></div>
+            <div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
+              {(profile.country || profile.suburb) && <div style={{ color: "var(--line-grey)", fontSize: 12, marginTop: 2 }}><LocationDisplay country={profile.country} suburb={profile.suburb} /></div>}
+              <Pill tone="blue">{accepted.length} player{accepted.length === 1 ? "" : "s"} on profile</Pill>
+            </div>
           </div>
           <Btn variant="ghost" onClick={() => setEditing((v) => !v)}>{editing ? "Cancel" : "Edit"}</Btn>
         </div>
         {editing ? (
           <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
+            <CoverEditor url={draft.coverUrl} onChange={(coverUrl) => setDraft({ ...draft, coverUrl })} />
             <AvatarEditor url={draft.avatarUrl} onChange={(url) => setDraft({ ...draft, avatarUrl: url })} fallbackIcon={Briefcase} fallbackColor="#7FB8E0" />
             <Field label="Bio"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.bio} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} /></Field>
+            <LocationFields country={draft.country} suburb={draft.suburb} onCountryChange={(v) => setDraft({ ...draft, country: v })} onSuburbChange={(v) => setDraft({ ...draft, suburb: v })} />
+            <ContactFieldsEditor email={draft.contactEmail} phone={draft.contactPhone} onEmailChange={(v) => setDraft({ ...draft, contactEmail: v })} onPhoneChange={(v) => setDraft({ ...draft, contactPhone: v })} />
+            <SocialLinksEditor links={draft.socialLinks} onChange={(socialLinks) => setDraft({ ...draft, socialLinks })} />
             <Field label="Achievements"><textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} value={draft.achievements} onChange={(e) => setDraft({ ...draft, achievements: e.target.value })} placeholder="Placed 6 players in professional contracts since 2020" /></Field>
             <Btn onClick={save} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : "Save changes"}</Btn>
           </div>
         ) : (
           <>
             {profile.bio && <div style={{ marginTop: 14, fontSize: 14 }}>{profile.bio}</div>}
+            <ContactFieldsDisplay email={profile.contactEmail} phone={profile.contactPhone} />
+            <SocialLinksDisplay links={profile.socialLinks} />
             {profile.achievements && <div style={{ marginTop: 8, fontSize: 13, color: "var(--line-grey)" }}>{profile.achievements}</div>}
           </>
         )}
@@ -1502,18 +1963,23 @@ function ProfileDetailView({ profileId, viewerProfile, allProfiles, onClose }) {
 
   const meta = TYPE_META[profile.type] || TYPE_META.supporter;
   const canSeeScoutingDetails = profile.id === viewerProfile.id || scoutAccess;
+  const CATEGORY_LABELS = { school: "School", club: "Club", pro: "Professional", social: "Social", action: "Action sport" };
 
   return (
     <div>
       <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--line-grey)", display: "flex", alignItems: "center", gap: 4, marginBottom: 14, cursor: "pointer", padding: 0, fontSize: 13 }}><ChevronLeft size={14} /> Back</button>
       <TeamSheetCard>
+        <CoverPhoto url={profile.coverUrl} />
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
           <Avatar url={profile.avatarUrl} size={56} fallbackIcon={meta.icon} fallbackColor={meta.color} />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{profile.name}</div>
             <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 2 }}>{meta.label}</div>
+            {(profile.country || profile.suburb) && <div style={{ color: "var(--line-grey)", fontSize: 12, marginTop: 2 }}><LocationDisplay country={profile.country} suburb={profile.suburb} /></div>}
           </div>
         </div>
+        <ContactFieldsDisplay email={profile.contactEmail} phone={profile.contactPhone} />
+        <SocialLinksDisplay links={profile.socialLinks} />
 
         {profile.type === "player" && (
           <>
@@ -1528,7 +1994,6 @@ function ProfileDetailView({ profileId, viewerProfile, allProfiles, onClose }) {
               {profile.height && <span>{profile.height}</span>}
               {profile.age && <span>{profile.age} yrs</span>}
               {profile.hobbies && <span>Hobbies: {profile.hobbies}</span>}
-              {profile.region && <span>Based in {profile.region}</span>}
             </div>
             {profile.stats && (
               <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14, flexWrap: "wrap" }}>
@@ -1554,6 +2019,7 @@ function ProfileDetailView({ profileId, viewerProfile, allProfiles, onClose }) {
               </div>
             )}
             <GalleryDisplay photos={profile.gallery} />
+            <CvDisplay cvFile={profile.cvFile} />
 
             {canSeeScoutingDetails && (profile.currentContract || profile.askingSalary || profile.contactInfo) && (
               <div style={{ marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
@@ -1574,11 +2040,25 @@ function ProfileDetailView({ profileId, viewerProfile, allProfiles, onClose }) {
         {profile.type === "club" && (
           <>
             <div style={{ color: "var(--line-grey)", fontSize: 13, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <span>{profile.location} \u00b7 {profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>
+              <span>{CATEGORY_LABELS[profile.level] || profile.level}{profile.founded && ` \u00b7 Est. ${profile.founded}`}</span>
               {profile.sport && <Pill>{profile.sport}</Pill>}
             </div>
+            {profile.history && <div style={{ marginTop: 10, fontSize: 13 }}>{profile.history}</div>}
             {profile.trophies?.length > 0 && <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>{profile.trophies.map((t, i) => <Pill key={i} tone="amber"><Trophy size={10} style={{ verticalAlign: -1, marginRight: 4 }} />{t}</Pill>)}</div>}
             {profile.currentLog && <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap" }}>{profile.currentLog}</div>}
+            {profile.sponsors?.length > 0 && (
+              <div style={{ marginTop: 14, borderTop: "1px solid var(--turf-500)", paddingTop: 12 }}>
+                <div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase", marginBottom: 8 }}>Sponsors</div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {profile.sponsors.map((s, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--turf-900)", borderRadius: 6, padding: "5px 10px" }}>
+                      <img src={s.logoUrl} alt="" style={{ width: 22, height: 22, borderRadius: 4, objectFit: "cover" }} />
+                      <span style={{ fontSize: 12 }}>{s.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <GalleryDisplay photos={profile.gallery} />
             <div style={{ display: "flex", gap: 24, marginTop: 16, borderTop: "1px solid var(--turf-500)", paddingTop: 14 }}>
               <div><div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 700, color: "var(--floodlight)" }}>{(profile.roster || []).length}</div><div style={{ fontSize: 11, color: "var(--line-grey)", textTransform: "uppercase" }}>Squad</div></div>

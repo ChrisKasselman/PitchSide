@@ -646,6 +646,42 @@ app.get("/api/friends/mine", authenticate, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: "Could not load friends." }); }
 });
 
+// ---- upcoming fixtures ----
+
+app.get("/api/events", async (req, res) => {
+  try {
+    const { clubId } = req.query;
+    const { rows } = clubId
+      ? await pool.query("SELECT id, payload FROM events WHERE club_id = $1 ORDER BY (payload->>'datetime') ASC", [clubId])
+      : await pool.query("SELECT id, payload FROM events ORDER BY (payload->>'datetime') ASC LIMIT 200");
+    res.json(rows.map((r) => ({ ...r.payload, id: r.id })));
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not load fixtures." }); }
+});
+
+app.post("/api/events", authenticate, async (req, res) => {
+  try {
+    const clubRow = await requireCallerProfile(req, res, "club");
+    if (!clubRow) return;
+    const { league, matchTitle, opponent, datetime, location } = req.body;
+    const id = uid();
+    const payload = { clubId: clubRow.id, clubName: clubRow.payload.name, league: league || "", matchTitle: matchTitle || "", opponent: opponent || "", datetime: datetime || "", location: location || "" };
+    await pool.query("INSERT INTO events (id, club_id, payload) VALUES ($1, $2, $3)", [id, clubRow.id, payload]);
+    res.status(201).json({ ...payload, id });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not create fixture." }); }
+});
+
+app.delete("/api/events/:id", authenticate, async (req, res) => {
+  try {
+    const clubRow = await requireCallerProfile(req, res, "club");
+    if (!clubRow) return;
+    const { rows } = await pool.query("SELECT club_id FROM events WHERE id = $1", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "Fixture not found." });
+    if (rows[0].club_id !== clubRow.id) return res.status(403).json({ error: "This isn't your fixture." });
+    await pool.query("DELETE FROM events WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Could not delete fixture." }); }
+});
+
 // ---- static frontend ----
 
 const clientDist = path.join(__dirname, "../client/dist");

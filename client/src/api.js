@@ -66,6 +66,11 @@ export const api = {
   listFriendsPosts: () => req("/posts/friends"),
   createPost: (post) => req("/posts", { method: "POST", body: JSON.stringify(post) }),
 
+  // fixtures
+  listEvents: (clubId) => req(`/events${clubId ? `?clubId=${encodeURIComponent(clubId)}` : ""}`),
+  createEvent: (event) => req("/events", { method: "POST", body: JSON.stringify(event) }),
+  deleteEvent: (id) => req(`/events/${id}`, { method: "DELETE" }),
+
   // admin
   adminStats: () => req("/admin/stats"),
 };

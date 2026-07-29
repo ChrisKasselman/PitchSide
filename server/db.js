@@ -118,6 +118,18 @@ async function initSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS friendships_addressee_idx ON friendships (addressee_id, status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS friendships_requester_idx ON friendships (requester_id, status);`);
+
+  // Upcoming fixtures a club/team schedules ahead of time - distinct from
+  // live_matches, which is real-time score tracking during a game already happening.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      club_id TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS events_club_idx ON events (club_id, created_at DESC);`);
 }
 
 module.exports = { pool, initSchema };
